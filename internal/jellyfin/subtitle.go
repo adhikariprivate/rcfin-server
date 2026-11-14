@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"path"
 	"regexp"
 	"strconv"
@@ -17,6 +18,28 @@ import (
 )
 
 var srtTimestamp = regexp.MustCompile(`(?m)(\d{2,}:\d{2}:\d{2}),(\d{3})`)
+
+func addSubtitleDeliveryToken(sources []JFMediaSources, token string) {
+	if token == "" {
+		return
+	}
+	for i := range sources {
+		for j := range sources[i].MediaStreams {
+			stream := &sources[i].MediaStreams[j]
+			if stream.Type != "Subtitle" || stream.DeliveryUrl == "" {
+				continue
+			}
+			deliveryURL, err := url.Parse(stream.DeliveryUrl)
+			if err != nil {
+				continue
+			}
+			query := deliveryURL.Query()
+			query.Set("api_key", token)
+			deliveryURL.RawQuery = query.Encode()
+			stream.DeliveryUrl = deliveryURL.String()
+		}
+	}
+}
 
 func srtToVTT(srt []byte) []byte {
 	srt = bytes.TrimPrefix(srt, []byte{0xef, 0xbb, 0xbf})

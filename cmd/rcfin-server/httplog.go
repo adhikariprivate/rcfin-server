@@ -3,7 +3,9 @@ package main
 import (
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -54,7 +56,7 @@ func HttpLog(handle http.Handler) http.HandlerFunc {
 		log.Printf("%s \"%s %s %s\" %d %d %s %v",
 			request.RemoteAddr,
 			request.Method,
-			request.URL.String(),
+			redactSensitiveQuery(request.URL),
 			request.Proto,
 			writer.status,
 			writer.length,
@@ -65,4 +67,19 @@ func HttpLog(handle http.Handler) http.HandlerFunc {
 			log.Printf("\n")
 		}
 	}
+}
+
+func redactSensitiveQuery(requestURL *url.URL) string {
+	if requestURL == nil {
+		return ""
+	}
+	copyURL := *requestURL
+	query := copyURL.Query()
+	for key := range query {
+		if strings.EqualFold(key, "api_key") || strings.EqualFold(key, "apikey") || strings.EqualFold(key, "access_token") {
+			query.Set(key, "[redacted]")
+		}
+	}
+	copyURL.RawQuery = query.Encode()
+	return copyURL.String()
 }

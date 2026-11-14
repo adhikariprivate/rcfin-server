@@ -95,7 +95,14 @@ func TestSubtitleStreamsAndAuthorizedDelivery(t *testing.T) {
 		t.Fatalf("unexpected movie streams: %#v", streams)
 	}
 	user := &model.User{ID: "test-user", Properties: model.UserProperties{EnabledFolders: []string{"movies", "shows"}}}
-	reqContext := &requestContext{Token: &model.AccessToken{UserID: user.ID, Token: "test"}, User: user}
+	if err := db.UpsertUser(context.Background(), user); err != nil {
+		t.Fatal(err)
+	}
+	accessToken := &model.AccessToken{UserID: user.ID, Token: "subtitle-test-token"}
+	if err := db.UpsertAccessToken(context.Background(), *accessToken); err != nil {
+		t.Fatal(err)
+	}
+	reqContext := &requestContext{Token: accessToken, User: user}
 	ctx := context.WithValue(context.Background(), requestContextKey, reqContext)
 	detail, err := j.makeJFItem(ctx, user.ID, movie, "movies", true)
 	if err != nil || len(detail.MediaStreams) != 4 || detail.MediaStreams[2].Type != "Subtitle" {
@@ -106,17 +113,26 @@ func TestSubtitleStreamsAndAuthorizedDelivery(t *testing.T) {
 		t.Fatalf("episode item details did not include subtitle tracks: err=%v streams=%#v", err, episodeDetail.MediaStreams)
 	}
 
-	playbackRequest := httptest.NewRequest(http.MethodPost, "/", nil)
-	playbackRequest = playbackRequest.WithContext(ctx)
-	playbackRequest = mux.SetURLVars(playbackRequest, map[string]string{"itemid": movie.ID()})
+	playbackRequest := httptest.NewRequest(http.MethodPost, "/Items/"+movie.ID()+"/PlaybackInfo", nil)
+	playbackRequest.Header.Set("X-Emby-Token", accessToken.Token)
 	playbackResponse := httptest.NewRecorder()
-	j.itemsPlaybackInfoHandler(playbackResponse, playbackRequest)
+	router.ServeHTTP(playbackResponse, playbackRequest)
 	var playback JFPlaybackInfoResponse
 	if err := json.Unmarshal(playbackResponse.Body.Bytes(), &playback); err != nil {
 		t.Fatalf("decode playback response: %v; body=%s", err, playbackResponse.Body.String())
 	}
 	if playbackResponse.Code != http.StatusOK || len(playback.MediaSources) != 1 || playback.MediaSources[0].DefaultSubtitleStreamIndex != 2 || len(playback.MediaSources[0].MediaStreams) != 4 {
 		t.Fatalf("unexpected playback info response: status=%d response=%#v", playbackResponse.Code, playback)
+	}
+	deliveryURL := playback.MediaSources[0].MediaStreams[2].DeliveryUrl
+	if got := strings.TrimPrefix(deliveryURL, "/"); !strings.Contains(got, "api_key="+accessToken.Token) {
+		t.Fatalf("subtitle delivery URL does not include the playback token: %q", deliveryURL)
+	}
+	subtitleRequest := httptest.NewRequest(http.MethodGet, deliveryURL, nil)
+	subtitleResponse := httptest.NewRecorder()
+	router.ServeHTTP(subtitleResponse, subtitleRequest)
+	if subtitleResponse.Code != http.StatusOK || !strings.Contains(subtitleResponse.Body.String(), "WEBVTT") {
+		t.Fatalf("authenticated subtitle URL fetch: status=%d content=%q", subtitleResponse.Code, subtitleResponse.Body.String())
 	}
 	if got := j.makeMediaSource(episode)[0].MediaStreams; len(got) != 3 || got[2].Language != "en" {
 		t.Fatalf("unexpected episode streams: %#v", got)

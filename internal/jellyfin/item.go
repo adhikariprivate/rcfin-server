@@ -1098,6 +1098,7 @@ func (j *Jellyfin) itemsPlaybackInfoHandler(w http.ResponseWriter, r *http.Reque
 		apierror(w, "Could not find item", http.StatusNotFound)
 		return
 	}
+	addSubtitleDeliveryToken(mediaSource, reqCtx.Token.Token)
 	session, err := j.sessionTable.Create(reqCtx.Token)
 	if err != nil {
 		apierror(w, "Failed to create user session", http.StatusInternalServerError)
