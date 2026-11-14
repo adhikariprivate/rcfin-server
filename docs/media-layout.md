@@ -18,8 +18,8 @@ TV/
     ├── clearlogo.png
     ├── S01/
     │   ├── The Fixers S01E01 - The Pilot.mp4
-    │   ├── The Fixers S01E01 - The Pilot.en.srt
-    │   ├── The Fixers S01E01 - The Pilot.fr.srt
+    │   ├── The Fixers S01E01 - The Pilot.en.default.srt
+    │   ├── The Fixers S01E01 - The Pilot.fr.vtt
     │   ├── The Fixers S01E01 - The Pilot-thumb.jpg
     │   ├── The Fixers S01E01 - The Pilot.nfo
     │   ├── The Fixers S01E02 - A New Day.mp4
@@ -54,13 +54,27 @@ Sidecars must be in the show root or the corresponding season directory, and epi
 | --- | --- | --- |
 | Show NFO | `Show/tvshow.nfo` | Read as show metadata. |
 | Episode NFO | Beside video, `<video stem>.nfo` | Read as episode metadata when the video episode was recognized. |
-| SRT subtitle | Beside video, `<video stem>.en.srt` (or another alphabetic language suffix) | Detected and associated with the episode. A suffixless `.srt` is also accepted but treated as unspecified. `.forced`, `.sdh`, and `.default` flags are not interpreted. |
-| VTT subtitle | `.vtt` sidecar | Not currently detected by the TV scanner's filename matcher, despite a later VTT handling branch. Use `.srt` if relying on current RCFin behavior. |
+| SRT subtitle | Beside video, `<video stem>.en.srt` (or another language suffix) | Detected, advertised as an external subtitle track, and served to Jellyfin clients. A suffixless `.srt` is accepted and treated as unspecified language. |
+| VTT subtitle | Beside video, `<video stem>.fr.vtt` | Detected, advertised, and served as WebVTT. |
 | Episode thumbnail | `<video stem>-thumb.jpg`, `<video stem>.thumb.jpg`, or equivalent `.jpeg`, `.png`, `.tbn` | Attached as the episode thumbnail. |
 | Show artwork | `poster`, `fanart`, `banner`, `folder`, or `clearlogo` with `.jpg`, `.jpeg`, `.png`, or `.tbn` | Recognized in the show root. For example, `poster.jpg` and `clearlogo.png`. |
 | Season poster/banner | `poster.jpg` / `banner.jpg` inside a season folder, or `season01-poster.jpg` / `season01-banner.jpg` in the show or season folder | Recognized as season artwork. |
 
-The scanner only attaches a thumbnail to an episode; this does not guarantee every Jellyfin client displays it as an episode primary poster. External subtitles are indexed by RCFin, but subtitle track advertisement/delivery to Jellyfin clients is not currently implemented.
+The scanner only attaches a thumbnail to an episode; this does not guarantee every Jellyfin client displays it as an episode primary poster. Sidecar subtitle tracks are included in item and playback media-stream information and delivered through authenticated Jellyfin-compatible subtitle URLs. RCFin checks the user's collection permission before serving the track.
+
+### Subtitle filename suffixes
+
+Use the exact video filename stem, then add dot-separated language and optional flags before `.srt` or `.vtt`:
+
+```text
+The Fixers S01E01 - The Pilot.en.srt
+The Fixers S01E01 - The Pilot.fr.forced.vtt
+The Fixers S01E01 - The Pilot.pt-BR.sdh.srt
+The Fixers S01E01 - The Pilot.en.default.srt
+The Fixers S01E01 - The Pilot.en.commentary.srt
+```
+
+RCFin recognizes alphabetic language tags such as `en`, `fr`, and `pt-BR`; `default`; `forced` (also `foreign`); and hearing-impaired markers `sdh` and `cc`. Other suffix text is shown as the track title. If no language tag is present, RCFin reports `und`. SRT tracks are converted to WebVTT when a Jellyfin client requests VTT delivery; the original sidecar is not modified. VTT sidecars are served as VTT. The playback URL supports both Jellyfin forms with and without a start-position component.
 
 ## Movie sidecars
 
@@ -74,10 +88,11 @@ Movies/
     ├── poster.jpg
     ├── fanart.jpg
     ├── banner.jpg
-    └── Example Movie.en.srt
+    ├── Example Movie.en.default.srt
+    └── Example Movie.es.vtt
 ```
 
-Movie artwork recognizes `banner`, `fanart`, `folder`, and `poster` names with `.jpg`, `.jpeg`, `.png`, or `.tbn`. Movie SRT sidecars use the same filename stem as the video, optionally followed by a language suffix. Movie NFO metadata is read from an NFO sidecar in the movie folder.
+Movie artwork recognizes `banner`, `fanart`, `folder`, and `poster` names with `.jpg`, `.jpeg`, `.png`, or `.tbn`. Movie SRT and VTT sidecars use the same filename stem as the video, optionally followed by the language and flags described above. Movie NFO metadata is read from an NFO sidecar in the movie folder.
 
 ## NFO metadata
 
@@ -86,5 +101,5 @@ NFO files are Kodi-style XML metadata. `tvshow.nfo` is the show-level filename; 
 ## Important limitations
 
 - Keep show folders directly under a shows collection root and season folders directly under each show. Nested grouping folders are not scanned as shows.
-- The scanner's supported extensions and filename rules above reflect its current implementation, not all formats supported by Jellyfin.
+- The scanner's supported video extensions and filename rules above reflect its current implementation, not all formats supported by Jellyfin.
 - A library rescan is needed after adding or renaming files; the automatic scan interval defaults to 30 minutes.

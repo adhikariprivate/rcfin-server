@@ -506,6 +506,9 @@ type JFMediaStreams struct {
 	AspectRatio            string  `json:"AspectRatio,omitempty"`
 	Index                  int     `json:"Index"`
 	IsExternal             bool    `json:"IsExternal"`
+	DeliveryMethod         string  `json:"DeliveryMethod,omitempty"`
+	DeliveryUrl            string  `json:"DeliveryUrl,omitempty"`
+	IsExternalUrl          bool    `json:"IsExternalUrl,omitempty"`
 	IsTextSubtitleStream   bool    `json:"IsTextSubtitleStream"`
 	SupportsExternalStream bool    `json:"SupportsExternalStream"`
 	PixelFormat            string  `json:"PixelFormat,omitempty"`
@@ -529,37 +532,38 @@ type JFRequiredHTTPHeaders struct {
 }
 
 type JFMediaSources struct {
-	Protocol                string                `json:"Protocol"`
-	ID                      string                `json:"Id"`
-	Path                    string                `json:"Path"`
-	Type                    string                `json:"Type"`
-	Container               string                `json:"Container"`
-	Size                    int64                 `json:"Size"`
-	Name                    string                `json:"Name"`
-	IsRemote                bool                  `json:"IsRemote"`
-	ETag                    string                `json:"ETag"`
-	RunTimeTicks            int64                 `json:"RunTimeTicks"`
-	ReadAtNativeFramerate   bool                  `json:"ReadAtNativeFramerate"`
-	HasSegments             bool                  `json:"HasSegments"`
-	IgnoreDts               bool                  `json:"IgnoreDts"`
-	IgnoreIndex             bool                  `json:"IgnoreIndex"`
-	GenPtsInput             bool                  `json:"GenPtsInput"`
-	SupportsTranscoding     bool                  `json:"SupportsTranscoding"`
-	SupportsDirectStream    bool                  `json:"SupportsDirectStream"`
-	SupportsDirectPlay      bool                  `json:"SupportsDirectPlay"`
-	IsInfiniteStream        bool                  `json:"IsInfiniteStream"`
-	RequiresOpening         bool                  `json:"RequiresOpening"`
-	RequiresClosing         bool                  `json:"RequiresClosing"`
-	RequiresLooping         bool                  `json:"RequiresLooping"`
-	SupportsProbing         bool                  `json:"SupportsProbing"`
-	VideoType               string                `json:"VideoType"`
-	MediaStreams            []JFMediaStreams      `json:"MediaStreams"`
-	MediaAttachments        []JFMediaAttachments  `json:"MediaAttachments"`
-	Formats                 []string              `json:"Formats"`
-	Bitrate                 int                   `json:"Bitrate"`
-	RequiredHTTPHeaders     JFRequiredHTTPHeaders `json:"RequiredHttpHeaders"`
-	TranscodingSubProtocol  string                `json:"TranscodingSubProtocol"`
-	DefaultAudioStreamIndex int                   `json:"DefaultAudioStreamIndex"`
+	Protocol                   string                `json:"Protocol"`
+	ID                         string                `json:"Id"`
+	Path                       string                `json:"Path"`
+	Type                       string                `json:"Type"`
+	Container                  string                `json:"Container"`
+	Size                       int64                 `json:"Size"`
+	Name                       string                `json:"Name"`
+	IsRemote                   bool                  `json:"IsRemote"`
+	ETag                       string                `json:"ETag"`
+	RunTimeTicks               int64                 `json:"RunTimeTicks"`
+	ReadAtNativeFramerate      bool                  `json:"ReadAtNativeFramerate"`
+	HasSegments                bool                  `json:"HasSegments"`
+	IgnoreDts                  bool                  `json:"IgnoreDts"`
+	IgnoreIndex                bool                  `json:"IgnoreIndex"`
+	GenPtsInput                bool                  `json:"GenPtsInput"`
+	SupportsTranscoding        bool                  `json:"SupportsTranscoding"`
+	SupportsDirectStream       bool                  `json:"SupportsDirectStream"`
+	SupportsDirectPlay         bool                  `json:"SupportsDirectPlay"`
+	IsInfiniteStream           bool                  `json:"IsInfiniteStream"`
+	RequiresOpening            bool                  `json:"RequiresOpening"`
+	RequiresClosing            bool                  `json:"RequiresClosing"`
+	RequiresLooping            bool                  `json:"RequiresLooping"`
+	SupportsProbing            bool                  `json:"SupportsProbing"`
+	VideoType                  string                `json:"VideoType"`
+	MediaStreams               []JFMediaStreams      `json:"MediaStreams"`
+	DefaultSubtitleStreamIndex int                   `json:"DefaultSubtitleStreamIndex"`
+	MediaAttachments           []JFMediaAttachments  `json:"MediaAttachments"`
+	Formats                    []string              `json:"Formats"`
+	Bitrate                    int                   `json:"Bitrate"`
+	RequiredHTTPHeaders        JFRequiredHTTPHeaders `json:"RequiredHttpHeaders"`
+	TranscodingSubProtocol     string                `json:"TranscodingSubProtocol"`
+	DefaultAudioStreamIndex    int                   `json:"DefaultAudioStreamIndex"`
 }
 
 type JFRemoteTrailers struct {

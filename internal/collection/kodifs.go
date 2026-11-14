@@ -21,9 +21,10 @@ var isImage = regexp.MustCompile(`^(.+)\.(jpg|jpeg|png|tbn)$`)
 var isImageExt = regexp.MustCompile(`^(jpg|jpeg|png|tbn)$`)
 var isSeasonImg = regexp.MustCompile(`^season([0-9]+)-?([a-z]+|)\.(jpg|jpeg|png|tbn)$`)
 var isShowSubdir = regexp.MustCompile(`^S([0-9]+)|Specials([0-9]*)$`)
-var isExt1 = regexp.MustCompile(`^(.*)()\.(png|jpg|jpeg|tbn|nfo|srt)$`)
-var isExt2 = regexp.MustCompile(`^(.*)[.-]([a-z]+)\.(png|jpg|jpeg|tbn|nfo|srt)$`)
+var isExt1 = regexp.MustCompile(`^(.*)()\.(png|jpg|jpeg|tbn|nfo|srt|vtt)$`)
+var isExt2 = regexp.MustCompile(`^(.*)[.-]([a-z]+)\.(png|jpg|jpeg|tbn|nfo|srt|vtt)$`)
 var isYear = regexp.MustCompile(` \(([0-9]+)\)$`)
+var subtitleLanguageSuffix = regexp.MustCompile(`(?i)^[a-z]{2,3}(?:-[a-z]{2,4})?$`)
 
 type epMapType struct {
 	eps *Episodes
@@ -124,6 +125,14 @@ func (cr *CollectionRepo) buildMovie(coll *Collection, dir string) (movie *Movie
 
 	for _, f := range fi {
 		name := f.Name()
+		if subtitle, format, ok := parseSubtitleSidecar(base, name); ok {
+			if format == "srt" {
+				movie.SrtSubs = append(movie.SrtSubs, subtitle)
+			} else {
+				movie.VttSubs = append(movie.VttSubs, subtitle)
+			}
+			continue
+		}
 
 		var aux string
 		var ext string
@@ -162,28 +171,6 @@ func (cr *CollectionRepo) buildMovie(coll *Collection, dir string) (movie *Movie
 			continue
 		}
 
-		if ext == "srt" {
-			if aux == "" || aux == "und" {
-				aux = "zz"
-			}
-			movie.SrtSubs = append(movie.SrtSubs, Subs{
-				Lang: aux,
-				Path: name,
-			})
-			continue
-		}
-
-		if ext == "vtt" {
-			if aux == "" || aux == "und" {
-				aux = "zz"
-			}
-			movie.VttSubs = append(movie.VttSubs, Subs{
-				Lang: aux,
-				Path: name,
-			})
-			continue
-		}
-
 		if ext == "nfo" {
 			if data, err := coll.Storage.ReadFile(path.Join(dir, name)); err == nil {
 				movie.Metadata = metadata.NewNfoFromData(path.Join(dir, name), data)
@@ -197,8 +184,6 @@ func (cr *CollectionRepo) buildMovie(coll *Collection, dir string) (movie *Movie
 	if movie.Metadata == nil {
 		movie.Metadata = metadata.NewFilename(movie.name, year)
 	}
-
-	cr.copySrtVttSubs(movie.SrtSubs, &movie.VttSubs)
 
 	dbItemMovie := &model.Item{
 		ID:    movie.id,
@@ -435,6 +420,15 @@ func (cr *CollectionRepo) showScanDir(coll *Collection, showDir, baseDir, season
 	for _, f := range fi {
 
 		name := f.Name()
+		if ep, subtitle, format := findEpisodeSubtitle(epMap, name); ep != nil {
+			subtitle.Path = path.Join(seasonDir, name)
+			if format == "srt" {
+				ep.SrtSubs = append(ep.SrtSubs, subtitle)
+			} else {
+				ep.VttSubs = append(ep.VttSubs, subtitle)
+			}
+			continue
+		}
 		s := isExt1.FindStringSubmatch(name)
 		ep, aux, ext := epMatch(epMap, s)
 		if ep == nil {
@@ -454,28 +448,6 @@ func (cr *CollectionRepo) showScanDir(coll *Collection, showDir, baseDir, season
 			case "thumb":
 				ep.thumb = p
 			}
-			continue
-		}
-
-		if ext == "srt" {
-			if aux == "" || aux == "und" {
-				aux = "zz"
-			}
-			ep.SrtSubs = append(ep.SrtSubs, Subs{
-				Lang: aux,
-				Path: p,
-			})
-			continue
-		}
-
-		if ext == "vtt" {
-			if aux == "" || aux == "und" {
-				aux = "zz"
-			}
-			ep.VttSubs = append(ep.VttSubs, Subs{
-				Lang: aux,
-				Path: p,
-			})
 			continue
 		}
 
@@ -575,16 +547,96 @@ func (cr *CollectionRepo) buildShow(coll *Collection, dir string) (show *Show) {
 	return
 }
 
-func (cr *CollectionRepo) copySrtVttSubs(srt Subtitles, vtt *Subtitles) {
-	for i := range srt {
-		sub := Subs{Lang: srt[i].Lang}
-		path := srt[i].Path
-		idx := strings.LastIndex(path, ".")
-		if idx >= 0 {
-			sub.Path = path[:idx] + ".vtt"
-			*vtt = append(*vtt, sub)
+func parseSubtitleSidecar(videoBase, filename string) (subtitle Subs, format string, ok bool) {
+	baseName := path.Base(filename)
+	extension := strings.ToLower(path.Ext(baseName))
+	if extension != ".srt" && extension != ".vtt" {
+		return Subs{}, "", false
+	}
+	stem := strings.TrimSuffix(baseName, path.Ext(baseName))
+	if len(stem) < len(videoBase) || stem[:len(videoBase)] != videoBase {
+		return Subs{}, "", false
+	}
+	remainder := stem[len(videoBase):]
+	if remainder != "" && !strings.ContainsRune(" ._-", rune(remainder[0])) {
+		return Subs{}, "", false
+	}
+	remainder = strings.TrimLeft(remainder, " ._-")
+
+	tokens := []string{}
+	if remainder != "" {
+		tokens = strings.Split(remainder, ".")
+	}
+	languageIndex := -1
+	for i := len(tokens) - 1; i >= 0; i-- {
+		if subtitleLanguageSuffix.MatchString(tokens[i]) && !isSubtitleFlag(tokens[i]) {
+			languageIndex = i
+			break
 		}
 	}
+	if languageIndex >= 0 && strings.EqualFold(tokens[languageIndex], "hi") {
+		for i := 0; i < languageIndex; i++ {
+			if subtitleLanguageSuffix.MatchString(tokens[i]) && !isSubtitleFlag(tokens[i]) {
+				languageIndex = i
+				break
+			}
+		}
+	}
+
+	subtitle = Subs{Lang: "und", Path: filename}
+	if languageIndex >= 0 {
+		subtitle.Lang = strings.ToLower(tokens[languageIndex])
+	}
+	titles := make([]string, 0, len(tokens))
+	for i, token := range tokens {
+		if i == languageIndex {
+			continue
+		}
+		switch strings.ToLower(token) {
+		case "default":
+			subtitle.IsDefault = true
+		case "forced", "foreign":
+			subtitle.IsForced = true
+		case "sdh", "cc":
+			subtitle.IsHearingImpaired = true
+		case "hi":
+			if languageIndex >= 0 {
+				subtitle.IsHearingImpaired = true
+			} else {
+				titles = append(titles, token)
+			}
+		default:
+			titles = append(titles, token)
+		}
+	}
+	subtitle.Title = strings.TrimSpace(strings.Join(titles, " "))
+	return subtitle, strings.TrimPrefix(extension, "."), true
+}
+
+func isSubtitleFlag(token string) bool {
+	switch strings.ToLower(token) {
+	case "default", "forced", "foreign", "sdh", "cc":
+		return true
+	default:
+		return false
+	}
+}
+
+func findEpisodeSubtitle(epMap map[string]epMapType, filename string) (*Episode, Subs, string) {
+	var matched *Episode
+	var subtitle Subs
+	var format string
+	longestBase := -1
+	for base, location := range epMap {
+		candidate, candidateFormat, ok := parseSubtitleSidecar(base, filename)
+		if ok && len(base) > longestBase {
+			matched = &(*location.eps)[location.idx]
+			subtitle = candidate
+			format = candidateFormat
+			longestBase = len(base)
+		}
+	}
+	return matched, subtitle, format
 }
 
 func parseInt(s string) (i int) {

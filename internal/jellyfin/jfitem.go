@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path"
 	"strings"
 	"time"
 
@@ -307,7 +308,14 @@ func (j *Jellyfin) makeMediaSource(item collection.Item) (mediasources []JFMedia
 		Bitrate:      item.VideoBitrate() + item.AudioBitrate(),
 		MediaStreams: j.makeJFMediaStreams(item),
 		// We assume audio stream is always at index 1 by makeJFMediaStreams()
-		DefaultAudioStreamIndex: 1,
+		DefaultAudioStreamIndex:    1,
+		DefaultSubtitleStreamIndex: -1,
+	}
+	for _, stream := range mediasource.MediaStreams {
+		if stream.Type == "Subtitle" && stream.IsDefault {
+			mediasource.DefaultSubtitleStreamIndex = stream.Index
+			break
+		}
 	}
 
 	return []JFMediaSources{mediasource}
@@ -428,7 +436,35 @@ func (j *Jellyfin) makeJFMediaStreams(item collection.Item) []JFMediaStreams {
 
 	audiostream.DisplayTitle = audiostream.Title + " - " + strings.ToUpper(audiostream.Codec)
 
-	return []JFMediaStreams{videostream, audiostream}
+	streams := []JFMediaStreams{videostream, audiostream}
+	itemID := item.ID()
+	routeItemID := itemID
+	if _, ok := item.(*collection.Episode); ok {
+		routeItemID = itemprefix_episode + itemID
+	}
+	for i, sub := range collection.SidecarSubtitles(item) {
+		codec := "subrip"
+		format := "vtt"
+		if strings.EqualFold(path.Ext(sub.Path), ".vtt") {
+			codec = "webvtt"
+		}
+		title := sub.Title
+		if title == "" {
+			title = strings.ToUpper(codec)
+		}
+		if sub.Lang != "" && sub.Lang != "und" {
+			title += " - " + strings.ToUpper(sub.Lang)
+		}
+		streams = append(streams, JFMediaStreams{
+			Index: 2 + i, Type: "Subtitle", Codec: codec, Language: sub.Lang,
+			Title: title, DisplayTitle: title, IsExternal: true, IsDefault: sub.IsDefault,
+			IsForced: sub.IsForced, IsHearingImpaired: sub.IsHearingImpaired,
+			DeliveryMethod: "External", DeliveryUrl: fmt.Sprintf("/Videos/%s/%s/Subtitles/%d/0/Stream.%s", routeItemID, item.ID(), 2+i, format),
+			IsExternalUrl: false, IsTextSubtitleStream: true, SupportsExternalStream: true,
+			LocalizedExternal: "External",
+		})
+	}
+	return streams
 }
 
 // makeRuntimeTicks converts a time.Duration to Jellyfin runtime ticks

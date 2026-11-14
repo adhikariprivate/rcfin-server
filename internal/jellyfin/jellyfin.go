@@ -199,6 +199,8 @@ func (j *Jellyfin) RegisterHandlers(s *mux.Router) {
 
 	r.Handle("/MediaSegments/{itemid}", mNoAuth(j.mediaSegmentsHandler))
 	r.Handle("/Videos/{itemid}/{stream}", m(j.videoStreamHandler))
+	r.Handle("/Videos/{itemid}/{mediasourceid}/Subtitles/{index}/Stream.{format}", m(j.subtitleStreamHandler)).Methods("GET", "HEAD")
+	r.Handle("/Videos/{itemid}/{mediasourceid}/Subtitles/{index}/{startpositionticks}/Stream.{format}", m(j.subtitleStreamHandler)).Methods("GET", "HEAD")
 
 	r.Handle("/Artists", m(j.artistsHandler)).Methods("GET")
 	r.Handle("/Artists/{name}", m(j.artistHandler)).Methods("GET")

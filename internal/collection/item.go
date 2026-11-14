@@ -407,11 +407,28 @@ func (e Episodes) Less(i, j int) bool {
 // Subs represents a subtitle file with its language and path.
 
 type Subs struct {
-	Lang string
-	Path string
+	Lang              string
+	Path              string
+	Title             string
+	IsDefault         bool
+	IsForced          bool
+	IsHearingImpaired bool
 }
 
 type Subtitles []Subs
+
+// SidecarSubtitles returns the sidecar subtitles associated with a playable
+// item. SRT and VTT lists remain separate to preserve their on-disk format.
+func SidecarSubtitles(item Item) Subtitles {
+	switch value := item.(type) {
+	case *Movie:
+		return append(append(Subtitles(nil), value.SrtSubs...), value.VttSubs...)
+	case *Episode:
+		return append(append(Subtitles(nil), value.SrtSubs...), value.VttSubs...)
+	default:
+		return nil
+	}
+}
 
 // makeSortName returns a name suitable for sorting.
 func makeSortName(name string) string {
