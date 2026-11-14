@@ -5,7 +5,8 @@
 *.so
 *.dylib
 bin/*
-rcfin-server
+/rcfin-server
+dist/
 
 # Test binary, built with `go test -c`
 *.test
