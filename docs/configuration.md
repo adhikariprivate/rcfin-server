@@ -59,10 +59,9 @@ Use the normal Rclone tooling to create and verify remote sections. RCFin embeds
 | `rclone.cache_dir` | Local root directory for VFS cache data. |
 | `jellyfin.server_id` | Optional stable server ID. Leave empty to let RCFin generate one. |
 | `jellyfin.server_name` | Display name; defaults to `RCFin`. |
-| `jellyfin.auto_register` | Whether RCFin automatically registers users. |
 | `jellyfin.quick_connect` | Whether Quick Connect is enabled. |
 | `jellyfin.image_quality_poster` | Poster image quality setting. |
-| `collections[].id` | Optional stable collection ID. |
+| `collections[].id` | Required stable library ID used by account grants. Keep it unchanged when renaming a library. |
 | `collections[].name` | Collection display name. |
 | `collections[].type` | `movies` or `shows`. |
 | `collections[].remote` | Rclone remote path, e.g. `files:HTPC/Movies`. This key is named `remote`, not `directory`. |
@@ -70,7 +69,7 @@ Use the normal Rclone tooling to create and verify remote sections. RCFin embeds
 
 The SQLite database, artwork cache, and Rclone VFS cache are local data. The media itself is accessed through Rclone. The selected VFS cache mode and limits determine how much local disk can be used for media reads.
 
-For compatibility, existing configs may continue using the compact Jellyfin keys `servername`, `autoregister`, and `imagequalityposter`. New configs should use `server_name`, `auto_register`, and `image_quality_poster` as shown in the example.
+For compatibility, existing configs may continue using the compact Jellyfin keys `servername` and `imagequalityposter`. New configs should use `server_name` and `image_quality_poster` as shown in the example. Every collection must have a unique `id` made of letters, digits, `_` or `-`; account library grants refer to this ID, never the display name. User registration is not supported; create users with the RCFin CLI. See [account administration](accounts.md).
 
 ## Troubleshooting
 

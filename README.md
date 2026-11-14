@@ -42,7 +42,7 @@ Edit `rcfin.yaml` before starting the server. Set the SQLite filename and global
 - `cachedir`: local image cache path.
 - `rclone`: global config-file path and local VFS cache root.
 - `rescan_interval`: application library refresh interval (default `30m`).
-- `collections`: optional library ID, display name, type (`movies` or `shows`), `remote` Rclone path, and per-library `vfs` options. The expected Kodi-style folder layouts are described below.
+- `collections`: required stable ID, display name, type (`movies` or `shows`), `remote` Rclone path, and per-library `vfs` options. User library grants refer to the ID, so keep it unchanged if you rename a library.
 - `jellyfin`: server name and supported user / Quick Connect settings.
 - `logfile`: log destination; use `stdout` (default), `stderr`, `none`, or a writable file path.
 
@@ -50,9 +50,7 @@ See [`rcfin.example.yaml`](rcfin.example.yaml) for a complete example and [`docs
 
 ## User accounts and sign-in
 
-RCFin stores accounts in its local SQLite database; there is no separate sign-up page or preconfigured default account. With `jellyfin.auto_register: true` (also accepted as the legacy `jellyfin.autoregister` spelling), enter a username and password in a compatible client's manual sign-in form. The first authentication creates that account; later clients use the same credentials. Fladder's username/password login works. Quick Connect is disabled unless `jellyfin.quick_connect` is enabled.
-
-Auto-registration creates a regular, hidden user, not an administrator. RCFin does not yet provide a first-run administrator setup flow. While auto-registration is enabled, anyone who can reach the server can create an account, so restrict access with `listen.ip_acl` or your network/firewall, or disable auto-registration after creating the users you need. With it disabled, unknown usernames receive an unauthorized response; they are not registered.
+RCFin stores manually managed accounts in its local SQLite database. There is no sign-up flow and no default account. Create the first administrator and manage users and library grants with the CLI commands documented in [Account administration](docs/accounts.md). New regular users start with no library access; administrators can access every library. Existing non-admin accounts lose their previous all-library access on the `v1.1.0` database migration, and must be granted access explicitly. Users can change their own passwords in compatible clients. Quick Connect is disabled unless `jellyfin.quick_connect` is enabled.
 
 ## Library layout
 

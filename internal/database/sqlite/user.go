@@ -85,14 +85,41 @@ func (s *SqliteRepo) UpsertUser(ctx context.Context, user *model.User) error {
 }
 
 func (s *SqliteRepo) DeleteUser(ctx context.Context, userID string) error {
-	tx, _ := s.dbWriteHandle.BeginTxx(ctx, nil)
-	defer tx.Rollback()
-	const query = `DELETE FROM users WHERE id = ?`
-	_, err := tx.ExecContext(ctx, query, userID)
+	tx, err := s.dbWriteHandle.BeginTxx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	return tx.Commit()
+	defer tx.Rollback()
+	for _, query := range []string{
+		`DELETE FROM playlist_items WHERE playlistid IN (SELECT id FROM playlists WHERE userid = ?)`,
+		`DELETE FROM playlists WHERE userid = ?`,
+		`DELETE FROM playstate WHERE userid = ?`,
+		`DELETE FROM accesstokens WHERE userid = ?`,
+		`DELETE FROM quickconnect WHERE userid = ?`,
+		`DELETE FROM images WHERE itemid = ?`,
+		`DELETE FROM user_properties WHERE userid = ?`,
+		`DELETE FROM users WHERE id = ?`,
+	} {
+		if _, err := tx.ExecContext(ctx, query, userID); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	for token, accessToken := range s.accessTokenCache {
+		if accessToken.UserID == userID {
+			delete(s.accessTokenCache, token)
+		}
+	}
+	for key := range s.userDataEntries {
+		if key.userID == userID {
+			delete(s.userDataEntries, key)
+		}
+	}
+	s.mu.Unlock()
+	return nil
 }
 
 // Database keys for user properties

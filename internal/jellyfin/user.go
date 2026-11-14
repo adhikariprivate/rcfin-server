@@ -1,23 +1,14 @@
 package jellyfin
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
-	"image"
-	"image/color"
-	"image/draw"
-	"image/png"
 	"net/http"
-	"strings"
-	"time"
 
 	"github.com/gorilla/mux"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/adhikariprivate/rcfin-server/internal/database/model"
-	"github.com/adhikariprivate/rcfin-server/internal/idhash"
 )
 
 const (
@@ -80,35 +71,7 @@ func (j *Jellyfin) usersPostHandler(w http.ResponseWriter, r *http.Request) {
 	if reqCtx == nil {
 		return
 	}
-	queryparams := r.URL.Query()
-	userID := queryparams.Get("userId")
-	// log.Printf("usersPostHandler: reqCtx.User.ID=%s, userID=%s\n", reqCtx.User.ID, userID)
-	// log.Printf("usersPostHandler: Admins=%v\n", reqCtx.User.Properties.Admin)
-
-	// Only allow if requester is an administrator or the user themselve
-	if !reqCtx.User.Properties.Admin && reqCtx.User.ID != userID {
-		apierror(w, "forbidden to update user policy", http.StatusForbidden)
-		return
-	}
-	dbuser, err := j.repo.GetUserByID(r.Context(), userID)
-	if err != nil {
-		apierror(w, ErrUserIDNotFound, http.StatusNotFound)
-		return
-	}
-	var req JFUser
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apierror(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-	dbuser.Username = strings.ToLower(req.Name)
-	parseJFUserPolicy(req.Policy, &dbuser.Properties)
-	parseJFUserConfiguration(req.Configuration, &dbuser.Properties)
-	if err = j.repo.UpsertUser(r.Context(), dbuser); err != nil {
-		apierror(w, "failed to update user", http.StatusInternalServerError)
-		return
-	}
-	response := j.makeJFUser(r.Context(), dbuser)
-	serveJSON(response, w)
+	apierror(w, "account administration is available through the RCFin CLI", http.StatusForbidden)
 }
 
 // GET /Users/Me
@@ -155,18 +118,7 @@ func (j *Jellyfin) userDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	if reqCtx == nil {
 		return
 	}
-	vars := mux.Vars(r)
-	userID := vars["userid"]
-	// Only allow if requester is an administrator and not deleting themselves
-	if !reqCtx.User.Properties.Admin || reqCtx.User.ID == userID {
-		apierror(w, "forbidden to delete user", http.StatusForbidden)
-		return
-	}
-	if err := j.repo.DeleteUser(r.Context(), userID); err != nil {
-		apierror(w, "failed to delete user", http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
+	apierror(w, "account administration is available through the RCFin CLI", http.StatusForbidden)
 }
 
 // GET /Users/Public
@@ -230,30 +182,7 @@ func (j *Jellyfin) usersPolicyHandler(w http.ResponseWriter, r *http.Request) {
 	if reqCtx == nil {
 		return
 	}
-	vars := mux.Vars(r)
-	userID := vars["userid"]
-	// Only allow if requester is an administrator or the user themselves
-	if !reqCtx.User.Properties.Admin && reqCtx.User.ID != userID {
-		apierror(w, "forbidden to update user policy", http.StatusForbidden)
-		return
-	}
-	dbuser, err := j.repo.GetUserByID(r.Context(), userID)
-	if err != nil {
-		apierror(w, ErrUserIDNotFound, http.StatusNotFound)
-		return
-	}
-	var req JFUserPolicy
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apierror(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-	// log.Printf("Updating user policy %+v", req)
-	parseJFUserPolicy(req, &dbuser.Properties)
-	if err = j.repo.UpsertUser(r.Context(), dbuser); err != nil {
-		apierror(w, "failed to update user policy", http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
+	apierror(w, "user policy changes are available through the RCFin CLI", http.StatusForbidden)
 }
 
 // POST /Users/Password
@@ -266,8 +195,11 @@ func (j *Jellyfin) usersPasswordHandler(w http.ResponseWriter, r *http.Request) 
 	}
 	queryparams := r.URL.Query()
 	userID := queryparams.Get("userId")
-	// Only allow if requester is an administrator or the user themselves
-	if !reqCtx.User.Properties.Admin && reqCtx.User.ID != userID {
+	if userID == "" {
+		userID = reqCtx.User.ID
+	}
+	// Password changes through the client are self-service only. Admin resets use the CLI.
+	if reqCtx.User.ID != userID {
 		apierror(w, "forbidden to update user password", http.StatusForbidden)
 		return
 	}
@@ -285,6 +217,14 @@ func (j *Jellyfin) usersPasswordHandler(w http.ResponseWriter, r *http.Request) 
 		apierror(w, "new password is required", http.StatusBadRequest)
 		return
 	}
+	currentPassword := req.CurrentPw
+	if currentPassword == "" {
+		currentPassword = req.CurrentPassword
+	}
+	if currentPassword == "" || validatePassword(dbuser.Password, currentPassword) != nil {
+		apierror(w, "current password is invalid", http.StatusUnauthorized)
+		return
+	}
 	hashedPassword, err := hashPassword(req.NewPw)
 	if err != nil {
 		apierror(w, "failed to hash password", http.StatusInternalServerError)
@@ -295,37 +235,11 @@ func (j *Jellyfin) usersPasswordHandler(w http.ResponseWriter, r *http.Request) 
 		apierror(w, "failed to update user password", http.StatusInternalServerError)
 		return
 	}
+	if err := revokeAccessTokens(r.Context(), j.repo, userID); err != nil {
+		apierror(w, "password changed but failed to revoke existing sessions", http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// POST /Users/New
-//
-// usersNewItemsHandler creates a new user with the provided username and password
-func (j *Jellyfin) usersNewItemsHandler(w http.ResponseWriter, r *http.Request) {
-	reqCtx := j.getRequestCtx(w, r)
-	if reqCtx == nil {
-		return
-	}
-	var req JFUserNewRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apierror(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-	if req.Name == "" || req.Password == "" {
-		apierror(w, "username and password are required", http.StatusBadRequest)
-		return
-	}
-	if req.Name == "New" || req.Name == "Me" {
-		apierror(w, "invalid username", http.StatusBadRequest)
-		return
-	}
-	dbuser, err := j.createUser(r.Context(), req.Name, req.Password)
-	if err != nil {
-		apierror(w, "failed to create user", http.StatusInternalServerError)
-		return
-	}
-	response := j.makeJFUser(r.Context(), dbuser)
-	serveJSON(response, w)
 }
 
 func (j *Jellyfin) makeJFUser(ctx context.Context, user *model.User) JFUser {
@@ -416,29 +330,6 @@ func parseJFUserPolicy(policy JFUserPolicy, props *model.UserProperties) {
 	props.BlockUnratedItems = policy.BlockUnratedItems
 }
 
-// createUser creates a new user in the database
-func (j *Jellyfin) createUser(context context.Context, username, password string) (*model.User, error) {
-	hashedPassword, err := hashPassword(password)
-	if err != nil {
-		return nil, err
-	}
-	modelUser := &model.User{
-		ID:         idhash.NewRandomID(),
-		Username:   strings.ToLower(username),
-		Password:   string(hashedPassword),
-		CreatedAt:  time.Now().UTC(),
-		Properties: model.UserPropertiesDefault(),
-	}
-	if err = j.repo.UpsertUser(context, modelUser); err != nil {
-		return nil, err
-	}
-	// Generate and store identicon avatar for this new user
-	if avatarMetadata, avatar, err := generateIdenticon(username); err == nil {
-		_ = j.repo.StoreImage(context, modelUser.ID, imageTypeProfile, avatarMetadata, avatar)
-	}
-	return modelUser, nil
-}
-
 // validatePassword validates a password against a hashed password
 func validatePassword(hashedPassword, password string) error {
 	return bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
@@ -453,46 +344,18 @@ func hashPassword(password string) (string, error) {
 	return string(hashedPassword), nil
 }
 
-// generateIdenticon generates a PNG avatar based on seed string
-func generateIdenticon(seed string) (model.ImageMetadata, []byte, error) {
-	const size int = 512
-
-	hash := sha256.Sum256([]byte(seed))
-	img := image.NewRGBA(image.Rect(0, 0, size, size))
-
-	// background
-	bg := color.RGBA{240, 240, 240, 255}
-	draw.Draw(img, img.Bounds(), &image.Uniform{bg}, image.Point{}, draw.Src)
-
-	// derive color
-	avatarColor := color.RGBA{R: hash[0], G: hash[1], B: hash[2], A: 255}
-
-	grid := 5        // draw 5x5 grid, mirroring left half to right
-	s := size / grid // size of each cell in the grid
-	index := 3       // Skip first 3 bytes of hash as they are used for color
-	for y := range grid {
-		for x := 0; x < (grid+1)/2; x++ {
-			if hash[index]%2 == 0 {
-				// left cell
-				rect := image.Rect(x*s, y*s, (x+1)*s, (y+1)*s)
-				draw.Draw(img, rect, &image.Uniform{avatarColor}, image.Point{}, draw.Src)
-				// mirrored right cell
-				mirrorX := grid - 1 - x
-				rectMirror := image.Rect(mirrorX*s, y*s, (mirrorX+1)*s, (y+1)*s)
-				draw.Draw(img, rectMirror, &image.Uniform{avatarColor}, image.Point{}, draw.Src)
-			}
-			index++
+func revokeAccessTokens(ctx context.Context, repo interface {
+	GetAccessTokens(context.Context, string) ([]model.AccessToken, error)
+	DeleteAccessToken(context.Context, string) error
+}, userID string) error {
+	tokens, err := repo.GetAccessTokens(ctx, userID)
+	if err != nil {
+		return err
+	}
+	for _, token := range tokens {
+		if err := repo.DeleteAccessToken(ctx, token.Token); err != nil {
+			return err
 		}
 	}
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
-		return model.ImageMetadata{}, nil, err
-	}
-	avatarMeta := model.ImageMetadata{
-		MimeType:  "image/png",
-		FileSize:  buf.Len(),
-		Etag:      idhash.HashBytes(buf.Bytes()),
-		UpdatedAt: time.Now().UTC(),
-	}
-	return avatarMeta, buf.Bytes(), nil
+	return nil
 }

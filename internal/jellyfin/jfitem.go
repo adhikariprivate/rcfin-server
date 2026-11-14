@@ -132,7 +132,7 @@ func (j *Jellyfin) getJFItemsByParentID(ctx context.Context, userID, parentID st
 	// Specific collection requested?
 	case isJFCollectionID(parentID):
 		c := j.collections.GetCollection(strings.TrimPrefix(parentID, itemprefix_collection))
-		if c == nil {
+		if c == nil || !j.userCanAccessCollection(ctx, userID, c.ID) {
 			return []JFItem{}, errors.New("could not find collection")
 		}
 		items := make([]JFItem, 0, len(c.Items))
@@ -146,8 +146,8 @@ func (j *Jellyfin) getJFItemsByParentID(ctx context.Context, userID, parentID st
 		return items, nil
 
 	case isJFSeasonID(parentID):
-		_, i := j.collections.GetItemByID(trimPrefix(parentID))
-		if i == nil {
+		c, i := j.collections.GetItemByID(trimPrefix(parentID))
+		if i == nil || c == nil || !j.userCanAccessCollection(ctx, userID, c.ID) {
 			return []JFItem{}, errors.New("could not find season")
 		}
 		if show, ok := i.(*collection.Season); ok {
@@ -159,7 +159,7 @@ func (j *Jellyfin) getJFItemsByParentID(ctx context.Context, userID, parentID st
 		}
 	}
 	// Check if parentID is a show to generate overviews
-	if _, show := j.collections.GetShowByID(trimPrefix(parentID)); show != nil {
+	if c, show := j.collections.GetShowByID(trimPrefix(parentID)); show != nil && c != nil && j.userCanAccessCollection(ctx, userID, c.ID) {
 		if items, err := j.makeJFSeasonsOverview(ctx, userID, show); err == nil {
 			return items, nil
 		}
@@ -172,6 +172,9 @@ func (j *Jellyfin) getJFItemsByParentID(ctx context.Context, userID, parentID st
 func (j *Jellyfin) getJFItemsAll(ctx context.Context, userID string) ([]JFItem, error) {
 	items := make([]JFItem, 0)
 	for _, c := range j.collections.GetCollections() {
+		if !j.userCanAccessCollection(ctx, userID, c.ID) {
+			continue
+		}
 		for _, i := range c.Items {
 			jfitem, err := j.makeJFItem(ctx, userID, i, c.ID, false)
 			if err != nil {
@@ -226,11 +229,20 @@ func (j *Jellyfin) makeJFItemByID(ctx context.Context, userID, itemID string) (J
 	if i == nil {
 		return JFItem{}, errors.New("item not found")
 	}
+	if c == nil || !j.userCanAccessCollection(ctx, userID, c.ID) {
+		return JFItem{}, errors.New("item not found")
+	}
 	return j.makeJFItem(ctx, userID, i, c.ID, true)
 }
 
 // makeJFItem make movie or show from provided item
 func (j *Jellyfin) makeJFItem(ctx context.Context, userID string, item collection.Item, parentID string, fulldetails bool) (JFItem, error) {
+	if item == nil {
+		return JFItem{}, errors.New("item not found")
+	}
+	if c, _ := j.collections.GetItemByID(item.ID()); c == nil || !j.userCanAccessCollection(ctx, userID, c.ID) {
+		return JFItem{}, errors.New("item not found")
+	}
 	switch i := item.(type) {
 	case *collection.Movie:
 		return j.makeJFItemMovie(ctx, userID, i, parentID, fulldetails)

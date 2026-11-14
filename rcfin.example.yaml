@@ -35,12 +35,11 @@ rclone:
 jellyfin:
   server_id: "" # Optional stable server ID; empty lets RCFin generate one.
   server_name: RCFin
-  auto_register: true
   quick_connect: false
   image_quality_poster: 40
 
 collections:
-  - id: movies # Optional stable ID.
+  - id: movies # Required stable ID used by account library grants; keep it unchanged.
     name: Movies
     type: movies # Supported values: movies, shows.
     # Must be a configured Rclone remote followed by a colon and remote path.

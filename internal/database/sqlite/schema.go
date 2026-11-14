@@ -104,6 +104,10 @@ filesize INTEGER NOT NULL,
 data BLOB NOT NULL);`,
 
 		`CREATE UNIQUE INDEX IF NOT EXISTS images_idx ON images (itemid, type)`,
+
+		`CREATE TABLE IF NOT EXISTS schema_migrations (
+version INTEGER NOT NULL PRIMARY KEY,
+applied DATETIME NOT NULL);`,
 	}
 
 	for _, query := range schema {

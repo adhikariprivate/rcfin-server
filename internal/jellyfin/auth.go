@@ -76,17 +76,13 @@ func (j *Jellyfin) usersAuthenticateByNameHandler(w http.ResponseWriter, r *http
 		return
 	}
 
-	// Try to auto-register user if not found and auto-register is enabled
 	if user == nil {
-		if !j.autoRegister {
-			apierror(w, "Invalid username/password", http.StatusUnauthorized)
-			return
-		}
-		user, err = j.createUser(r.Context(), request.Username, request.Pw)
-		if err != nil || user == nil {
-			apierror(w, "Failed to auto-register user", http.StatusInternalServerError)
-			return
-		}
+		apierror(w, "Invalid username/password", http.StatusUnauthorized)
+		return
+	}
+	if user.Properties.Disabled {
+		apierror(w, "account is disabled", http.StatusUnauthorized)
+		return
 	}
 	// Update user's last login and last used time
 	user.LastLogin = time.Now().UTC()
@@ -186,6 +182,10 @@ func (j *Jellyfin) usersAuthenticateWithQuickConnectHandler(w http.ResponseWrite
 	if err != nil {
 		log.Printf("Error retrieving user for quick connect code from db for secret: %s, userID: %s: %s\n", request.Secret, quickCode.UserID, err)
 		apierror(w, "user not found for quickconnect code", http.StatusInternalServerError)
+		return
+	}
+	if user.Properties.Disabled {
+		apierror(w, "account is disabled", http.StatusUnauthorized)
 		return
 	}
 	// Update user's last login and last used time
@@ -372,6 +372,10 @@ func (j *Jellyfin) authmiddleware(next http.Handler) http.Handler {
 		if err != nil {
 			log.Printf("Error retrieving user for access token from db for token: %s, userID: %s: %s\n", requestToken, token.UserID, err)
 			apierror(w, "invalid access token", http.StatusUnauthorized)
+			return
+		}
+		if user.Properties.Disabled {
+			apierror(w, "account is disabled", http.StatusUnauthorized)
 			return
 		}
 		requestCtx := &requestContext{

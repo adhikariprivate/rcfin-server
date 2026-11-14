@@ -3,6 +3,7 @@ package jellyfin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"strconv"
@@ -245,7 +246,10 @@ func (j *Jellyfin) sessionsPlayingStoppedHandler(w http.ResponseWriter, r *http.
 
 func (j *Jellyfin) userDataUpdate(ctx context.Context, userID, itemID string, positionTicks int64, markAsWatched bool) (err error) {
 	var duration int64
-	if _, item := j.collections.GetItemByID(trimPrefix(itemID)); item != nil {
+	if c, item := j.collections.GetItemByID(trimPrefix(itemID)); item != nil {
+		if c == nil || !j.userCanAccessCollection(ctx, userID, c.ID) {
+			return errors.New("item not found")
+		}
 		duration = int64(item.Duration().Seconds())
 	}
 	// log.Printf("userDataUpdate userID: %s, itemID: %s, Progress: %d sec, Duration: %d sec\n",

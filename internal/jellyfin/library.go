@@ -22,11 +22,12 @@ func (j *Jellyfin) libraryVirtualFoldersHandler(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// todo: should this take EnabledFolders into account? Or is that only for the /UserViews endpoint?
-
 	collections := j.collections.GetCollections()
 	response := make([]JFMediaLibrary, 0, len(collections))
 	for _, c := range collections {
+		if !j.userCanAccessCollection(r.Context(), reqCtx.User.ID, c.ID) {
+			continue
+		}
 		collectionItem, err := j.makeJFItemCollection(r.Context(), reqCtx.User.ID, c.ID)
 		if err != nil {
 			apierror(w, err.Error(), http.StatusInternalServerError)
@@ -64,28 +65,6 @@ func (j *Jellyfin) usersViewsHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		apierror(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-
-	// log.Printf("usersViewsHandler: EnableAllFolders: %v, EnabledFolders: %v, OrderedViews: %v, MyMediaExcludes: %v",
-	// 	reqCtx.User.Properties.EnableAllFolders, reqCtx.User.Properties.EnabledFolders, reqCtx.User.Properties.OrderedViews, reqCtx.User.Properties.MyMediaExcludes)
-
-	// for _, item := range items {
-	// 	log.Printf("usersViewsHandler: before filtering item: %s, DisplayPreferencesID: %s", item.ID, item.DisplayPreferencesID)
-	// }
-
-	// If EnableAllFolders is false, we need to filter the items based on EnabledFolders
-	if !reqCtx.User.Properties.EnableAllFolders {
-		filteredItems := make([]JFItem, 0, len(items))
-		for _, item := range items {
-			if slices.Contains(reqCtx.User.Properties.EnabledFolders, item.ID) {
-				filteredItems = append(filteredItems, item)
-			}
-		}
-		items = filteredItems
-
-		// for _, item := range items {
-		// 	log.Printf("usersViewsHandler: after filtering item: %s, DisplayPreferencesID: %s", item.ID, item.DisplayPreferencesID)
-		// }
 	}
 
 	queryparams := r.URL.Query()
@@ -144,6 +123,9 @@ func (j *Jellyfin) usersGroupingOptionsHandler(w http.ResponseWriter, r *http.Re
 	collections := j.collections.GetCollections()
 	response := make([]JFCollection, 0, len(collections))
 	for _, c := range j.collections.GetCollections() {
+		if !j.userCanAccessCollection(r.Context(), reqCtx.User.ID, c.ID) {
+			continue
+		}
 		collectionItem, err := j.makeJFItemCollection(r.Context(), reqCtx.User.ID, c.ID)
 		if err != nil {
 			apierror(w, err.Error(), http.StatusInternalServerError)
@@ -164,6 +146,10 @@ func (j *Jellyfin) usersGroupingOptionsHandler(w http.ResponseWriter, r *http.Re
 func (j *Jellyfin) libraryRefreshHandler(w http.ResponseWriter, r *http.Request) {
 	reqCtx := j.getRequestCtx(w, r)
 	if reqCtx == nil {
+		return
+	}
+	if !reqCtx.User.Properties.Admin {
+		apierror(w, "administrator privileges required", http.StatusForbidden)
 		return
 	}
 	// Scanning can take a while on large remotes, so run it in the
@@ -218,6 +204,9 @@ func (j *Jellyfin) makeJFItemRoot(ctx context.Context, userID string) (response 
 func (j *Jellyfin) makeJFCollectionRootOverview(ctx context.Context, userID string) ([]JFItem, error) {
 	items := make([]JFItem, 0)
 	for _, c := range j.collections.GetCollections() {
+		if !j.userCanAccessCollection(ctx, userID, c.ID) {
+			continue
+		}
 		if item, err := j.makeJFItemCollection(ctx, userID, c.ID); err == nil {
 			items = append(items, item)
 		}
@@ -235,7 +224,7 @@ func (j *Jellyfin) makeJFCollectionRootOverview(ctx context.Context, userID stri
 // makeJFItemCollection creates a JFItem representing a collection.
 func (j *Jellyfin) makeJFItemCollection(ctx context.Context, userID, collectionID string) (JFItem, error) {
 	c := j.collections.GetCollection(collectionID)
-	if c == nil {
+	if c == nil || !j.userCanAccessCollection(ctx, userID, collectionID) {
 		return JFItem{}, errors.New("collection not found")
 	}
 	id := makeJFCollectionID(collectionID)
@@ -282,7 +271,11 @@ func (j *Jellyfin) makeJFItemCollection(ctx context.Context, userID, collectionI
 func (j *Jellyfin) makeJFItemCollectionFavorites(ctx context.Context, userID string) (JFItem, error) {
 	var itemCount int
 	if favoriteIDs, err := j.repo.GetFavorites(ctx, userID); err == nil {
-		itemCount = len(favoriteIDs)
+		for _, favoriteID := range favoriteIDs {
+			if c, item := j.collections.GetItemByID(favoriteID); c != nil && item != nil && j.userCanAccessCollection(ctx, userID, c.ID) {
+				itemCount++
+			}
+		}
 	}
 
 	id := makeJFCollectionFavoritesID(favoritesCollectionID)
@@ -328,6 +321,9 @@ func (j *Jellyfin) makeJFItemFavoritesOverview(ctx context.Context, userID strin
 	items := []JFItem{}
 	for _, itemID := range favoriteIDs {
 		if c, i := j.collections.GetItemByID(itemID); c != nil && i != nil {
+			if !j.userCanAccessCollection(ctx, userID, c.ID) {
+				continue
+			}
 			// We only add movies and shows in favorites
 			switch i.(type) {
 			case *collection.Movie, *collection.Show:

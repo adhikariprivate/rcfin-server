@@ -133,6 +133,9 @@ func (j *Jellyfin) usersItemsHandler(w http.ResponseWriter, r *http.Request) {
 		items = make([]JFItem, 0, len(foundItemIDs))
 		for _, id := range foundItemIDs {
 			c, i := j.collections.GetItemByID(id)
+			if c == nil || i == nil || !j.userCanAccessCollection(r.Context(), reqCtx.User.ID, c.ID) {
+				continue
+			}
 			jfitem, err := j.makeJFItem(r.Context(), reqCtx.User.ID, i, c.ID, false)
 			if err != nil {
 				apierror(w, err.Error(), http.StatusInternalServerError)
@@ -253,6 +256,9 @@ func (j *Jellyfin) searchHintsHandler(w http.ResponseWriter, r *http.Request) {
 		if searchC != nil && searchC.ID != c.ID {
 			continue
 		}
+		if !j.userCanAccessCollection(r.Context(), reqCtx.User.ID, c.ID) {
+			continue
+		}
 
 		for _, i := range c.Items {
 			jfitem, err := j.makeJFItem(r.Context(), reqCtx.User.ID, i, c.ID, false)
@@ -289,7 +295,7 @@ func (j *Jellyfin) usersItemsAncestorsHandler(w http.ResponseWriter, r *http.Req
 	itemID := vars["itemid"]
 
 	c, i := j.collections.GetItemByID(itemID)
-	if i == nil {
+	if i == nil || c == nil || !j.userCanAccessCollection(r.Context(), reqCtx.User.ID, c.ID) {
 		apierror(w, "Item not found", http.StatusNotFound)
 		return
 	}
@@ -317,7 +323,23 @@ func (j *Jellyfin) usersItemsCountsHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	stats := j.collections.GetStatistics()
+	stats := collection.Statistics{}
+	for _, library := range j.collections.GetCollections() {
+		if !j.userCanAccessCollection(r.Context(), reqCtx.User.ID, library.ID) {
+			continue
+		}
+		for _, item := range library.Items {
+			switch value := item.(type) {
+			case *collection.Movie:
+				stats.MovieCount++
+			case *collection.Show:
+				stats.ShowCount++
+				for _, season := range value.Seasons {
+					stats.EpisodeCount += len(season.Episodes)
+				}
+			}
+		}
+	}
 
 	response := JFItemCountResponse{
 		MovieCount:   stats.MovieCount,
@@ -350,6 +372,9 @@ func (j *Jellyfin) usersItemsResumeHandler(w http.ResponseWriter, r *http.Reques
 	items := make([]JFItem, 0, len(resumeItemIDs))
 	for _, id := range resumeItemIDs {
 		if c, i := j.collections.GetItemByID(id); c != nil && i != nil {
+			if !j.userCanAccessCollection(r.Context(), reqCtx.User.ID, c.ID) {
+				continue
+			}
 			jfitem, err := j.makeJFItem(r.Context(), reqCtx.User.ID, i, c.ID, false)
 			if err != nil {
 				apierror(w, err.Error(), http.StatusInternalServerError)
@@ -416,7 +441,7 @@ func (j *Jellyfin) usersItemsSimilarHandler(w http.ResponseWriter, r *http.Reque
 
 	// Retrieve item to find similars for
 	c, i := j.collections.GetItemByID(trimPrefix(itemID))
-	if i == nil {
+	if i == nil || c == nil || !j.userCanAccessCollection(r.Context(), reqCtx.User.ID, c.ID) {
 		apierror(w, "Item not found", http.StatusNotFound)
 		return
 	}
@@ -430,6 +455,9 @@ func (j *Jellyfin) usersItemsSimilarHandler(w http.ResponseWriter, r *http.Reque
 	items := make([]JFItem, 0, len(similarItemIDs))
 	for _, id := range similarItemIDs {
 		c, i := j.collections.GetItemByID(id)
+		if c == nil || i == nil || !j.userCanAccessCollection(r.Context(), reqCtx.User.ID, c.ID) {
+			continue
+		}
 		jfitem, err := j.makeJFItem(r.Context(), reqCtx.User.ID, i, c.ID, false)
 		if err != nil {
 			apierror(w, err.Error(), http.StatusInternalServerError)
@@ -1060,8 +1088,8 @@ func (j *Jellyfin) itemsPlaybackInfoHandler(w http.ResponseWriter, r *http.Reque
 	vars := mux.Vars(r)
 	itemID := vars["itemid"]
 
-	_, i := j.collections.GetItemByID(trimPrefix(itemID))
-	if i == nil {
+	c, i := j.collections.GetItemByID(trimPrefix(itemID))
+	if i == nil || c == nil || !j.userCanAccessCollection(r.Context(), reqCtx.User.ID, c.ID) {
 		apierror(w, "Could not find item", http.StatusNotFound)
 		return
 	}
@@ -1123,11 +1151,15 @@ func (j *Jellyfin) mediaSegmentsHandler(w http.ResponseWriter, r *http.Request) 
 //
 // videoStreamHandler streams the actual video file to the client
 func (j *Jellyfin) videoStreamHandler(w http.ResponseWriter, r *http.Request) {
+	reqCtx := j.getRequestCtx(w, r)
+	if reqCtx == nil {
+		return
+	}
 	vars := mux.Vars(r)
 	itemID := vars["itemid"]
 
 	c, i := j.collections.GetItemByID(trimPrefix(itemID))
-	if i == nil || i.FileName() == "" {
+	if i == nil || c == nil || i.FileName() == "" || !j.userCanAccessCollection(r.Context(), reqCtx.User.ID, c.ID) {
 		apierror(w, "Item not found", http.StatusNotFound)
 		return
 	}

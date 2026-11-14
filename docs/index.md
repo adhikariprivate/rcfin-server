@@ -1,6 +1,7 @@
 # RCFin documentation
 
 - [Configuration](configuration.md): server settings, global Rclone config, libraries, and VFS option syntax.
+- [Account administration](accounts.md): CLI user management, password changes, stable library IDs, access grants, and upgrade behavior.
 - [Media layout](media-layout.md): supported movie and TV folders, filenames, NFO sidecars, subtitles, and artwork.
 - [Rclone storage](rclone-storage.md): remote setup, per-library VFS instances, streaming and seek behavior, caching, and troubleshooting.
 - [VFS options reference](vfs-options.md): every Rclone VFS option accepted under each library's `vfs` block.

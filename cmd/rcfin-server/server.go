@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -51,28 +52,26 @@ type configFile struct {
 		Config   string `mapstructure:"config"`
 		CacheDir string `mapstructure:"cache_dir"`
 	} `mapstructure:"rclone"`
-	Collections []struct {
-		ID     string         `mapstructure:"id"`
-		Name   string         `mapstructure:"name"`
-		Type   string         `mapstructure:"type"`
-		Remote string         `mapstructure:"remote"`
-		VFS    map[string]any `mapstructure:"vfs"`
-	}
-	Jellyfin struct {
+	Collections []collectionConfig `mapstructure:"collections"`
+	Jellyfin    struct {
 		ServerID           string `mapstructure:"server_id"`
 		ServerName         string `mapstructure:"server_name"`
-		AutoRegister       bool   `mapstructure:"auto_register"`
 		QuickConnect       bool   `mapstructure:"quick_connect"`
 		ImageQualityPoster int    `mapstructure:"image_quality_poster"`
 	}
 }
 
+type collectionConfig struct {
+	ID     string         `mapstructure:"id"`
+	Name   string         `mapstructure:"name"`
+	Type   string         `mapstructure:"type"`
+	Remote string         `mapstructure:"remote"`
+	VFS    map[string]any `mapstructure:"vfs"`
+}
+
 func applyLegacyJellyfinConfig(v *viper.Viper, config *configFile) {
 	// Keep accepting the original compact key spellings used by pre-1.0.1
 	// configs while documenting the underscore-separated names going forward.
-	if !v.IsSet("jellyfin.auto_register") && v.IsSet("jellyfin.autoregister") {
-		config.Jellyfin.AutoRegister = v.GetBool("jellyfin.autoregister")
-	}
 	if !v.IsSet("jellyfin.server_name") && v.IsSet("jellyfin.servername") {
 		config.Jellyfin.ServerName = v.GetString("jellyfin.servername")
 	}
@@ -81,7 +80,55 @@ func applyLegacyJellyfinConfig(v *viper.Viper, config *configFile) {
 	}
 }
 
+func readConfig(filename string) (configFile, error) {
+	v := viper.New()
+	v.SetConfigType("yaml")
+	v.SetConfigFile(filename)
+	if err := v.ReadInConfig(); err != nil {
+		return configFile{}, err
+	}
+	var config configFile
+	if err := v.Unmarshal(&config); err != nil {
+		return configFile{}, err
+	}
+	applyLegacyJellyfinConfig(v, &config)
+	return config, nil
+}
+
+var libraryIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+func validateCollections(collections []collectionConfig) error {
+	seen := make(map[string]struct{}, len(collections))
+	for i, c := range collections {
+		if !libraryIDPattern.MatchString(c.ID) {
+			return fmt.Errorf("collections[%d].id is required and must contain only letters, digits, underscores, or hyphens", i)
+		}
+		if _, ok := seen[c.ID]; ok {
+			return fmt.Errorf("duplicate collection ID %q", c.ID)
+		}
+		seen[c.ID] = struct{}{}
+		if c.Name == "" || c.Remote == "" {
+			return fmt.Errorf("collection %q requires a name and remote", c.ID)
+		}
+		if c.Type != "movies" && c.Type != "shows" {
+			return fmt.Errorf("collection %q has unsupported type %q", c.ID, c.Type)
+		}
+	}
+	return nil
+}
+
 func main() {
+	if args, configPath, ok := managementCommand(os.Args[1:]); ok {
+		if err := runManagementCommand(configPath, args); err != nil {
+			log.Printf("%v", err)
+			os.Exit(1)
+		}
+		return
+	}
+	runServer()
+}
+
+func runServer() {
 	const configFileNameKey = "config"
 
 	// Set up viper for config file and command line flags
@@ -102,15 +149,10 @@ func main() {
 	// Read config file
 	cf := viper.GetString(configFileNameKey)
 	log.Printf("Using config file %s", cf)
-	viper.SetConfigFile(cf)
-	if err := viper.ReadInConfig(); err != nil {
+	config, err := readConfig(cf)
+	if err != nil {
 		log.Fatalf("Error reading config file: %v", err)
 	}
-	var config configFile
-	if err := viper.Unmarshal(&config); err != nil {
-		log.Fatalf("Unable to decode config into struct: %v", err)
-	}
-	applyLegacyJellyfinConfig(viper.GetViper(), &config)
 
 	// Set up logging
 	logfile := viper.GetString("logfile")
@@ -131,8 +173,10 @@ func main() {
 		log.SetOutput(f)
 	}
 
+	if err := validateCollections(config.Collections); err != nil {
+		log.Fatalf("invalid collections: %v", err)
+	}
 	log.Printf("dbinit")
-	var err error
 	var repo database.Repository
 	if config.Database.Sqlite.Filename != "" {
 		repo, err = database.New("sqlite", sqlite.ConfigFile{
@@ -141,6 +185,9 @@ func main() {
 	}
 	if err != nil {
 		log.Fatalf("database.New: %s", err.Error())
+	}
+	if repo == nil {
+		log.Fatal("database.sqlite.filename is required")
 	}
 	repo.StartBackgroundJobs(context.Background())
 	if err := rclonestore.Configure(config.Rclone.Config, config.Rclone.CacheDir); err != nil {
@@ -193,7 +240,6 @@ func main() {
 		ServerPort:         config.Listen.Port,
 		ServerID:           config.Jellyfin.ServerID,
 		ServerName:         config.Jellyfin.ServerName,
-		AutoRegister:       config.Jellyfin.AutoRegister,
 		QuickConnect:       config.Jellyfin.QuickConnect,
 		ImageQualityPoster: config.Jellyfin.ImageQualityPoster,
 	})

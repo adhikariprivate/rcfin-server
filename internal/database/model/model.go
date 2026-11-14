@@ -66,8 +66,8 @@ func UserPropertiesDefault() UserProperties {
 	return UserProperties{
 		// Users are hidden by default, so they don't show up in the public user list.
 		IsHidden: true,
-		// Users have access to all folders and can download media.
-		EnableAllFolders: true,
+		// Regular users receive no library access until explicitly granted.
+		EnableAllFolders: false,
 		// Users can download media.
 		EnableDownloads: true,
 	}

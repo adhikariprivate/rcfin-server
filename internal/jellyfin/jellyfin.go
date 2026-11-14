@@ -27,8 +27,6 @@ type Options struct {
 	ServerName string
 	// ServerPort is the port of the server
 	ServerPort string
-	// Indicates if we should auto-register Jellyfin users
-	AutoRegister bool
 	// Indicates if quickconnect is enabled
 	QuickConnect bool
 	// JPEG quality for posters
@@ -48,8 +46,6 @@ type Jellyfin struct {
 	serverID string
 	// serverName is name of server returned in info responses
 	serverName string
-	// Indicates if we should auto-register Jellyfin users
-	autoRegister bool
 	// Indicates if quickconnect is enabled
 	quickConnectEnabled bool
 	// JPEG quality for posters
@@ -64,7 +60,6 @@ func New(o *Options) *Jellyfin {
 		sessionTable:        NewSessionTable(),
 		serverID:            o.ServerID,
 		serverName:          o.ServerName,
-		autoRegister:        o.AutoRegister,
 		quickConnectEnabled: o.QuickConnect,
 		imageQualityPoster:  o.ImageQualityPoster,
 	}
@@ -121,7 +116,6 @@ func (j *Jellyfin) RegisterHandlers(s *mux.Router) {
 	r.Handle("/Users", m(j.usersGetHandler)).Methods("GET")
 	r.Handle("/Users", m(j.usersPostHandler)).Methods("POST")
 	r.Handle("/Users/Me", m(j.usersMeHandler)).Methods("GET")
-	r.Handle("/Users/New", m(j.usersNewItemsHandler)).Methods("POST")
 	r.Handle("/Users/Password", m(j.usersPasswordHandler)).Methods("POST")
 	r.Handle("/Users/Public", mNoAuth(j.usersPublicHandler)).Methods("GET")
 	r.Handle("/Users/{userid}", m(j.userGetHandler)).Methods("GET")
@@ -166,11 +160,11 @@ func (j *Jellyfin) RegisterHandlers(s *mux.Router) {
 	r.Handle("/Items/{itemid}", m(j.itemsDeleteHandler)).Methods("DELETE")
 	r.Handle("/Items/{itemid}/Ancestors", m(j.usersItemsAncestorsHandler))
 	// r.Handle("/Items/{itemid}/Download", middleware(j.usersItemsDownloadHandler))
-	r.Handle("/Items/{itemid}/Images", http.HandlerFunc(j.itemsImagesHandler))
-	r.Handle("/Items/{itemid}/Images/{type}", http.HandlerFunc(j.itemsImagesGetHandler)).Methods("GET", "HEAD")
-	r.Handle("/Items/{itemid}/Images/{type}", http.HandlerFunc(j.itemsImagesPostHandler)).Methods("POST")
-	r.Handle("/Items/{itemid}/Images/{type}/{index}", http.HandlerFunc(j.itemsImagesGetHandler)).Methods("GET", "HEAD")
-	r.Handle("/Items/{itemid}/Images/{type}/{index}", http.HandlerFunc(j.itemsImagesPostHandler)).Methods("POST")
+	r.Handle("/Items/{itemid}/Images", m(j.itemsImagesHandler))
+	r.Handle("/Items/{itemid}/Images/{type}", m(j.itemsImagesGetHandler)).Methods("GET", "HEAD")
+	r.Handle("/Items/{itemid}/Images/{type}", m(j.itemsImagesPostHandler)).Methods("POST")
+	r.Handle("/Items/{itemid}/Images/{type}/{index}", m(j.itemsImagesGetHandler)).Methods("GET", "HEAD")
+	r.Handle("/Items/{itemid}/Images/{type}/{index}", m(j.itemsImagesPostHandler)).Methods("POST")
 	// r.Handle("/Items/{itemid}/Intros", m(j.usersItemsIntrosHandler))
 	r.Handle("/Items/{itemid}/LocalTrailers", m(j.usersItemsLocalTrailersHandler))
 	r.Handle("/Items/{itemid}/PlaybackInfo", m(j.itemsPlaybackInfoHandler))
@@ -204,7 +198,7 @@ func (j *Jellyfin) RegisterHandlers(s *mux.Router) {
 	r.Handle("/Movies/Recommendations", m(j.moviesRecommendationsHandler))
 
 	r.Handle("/MediaSegments/{itemid}", mNoAuth(j.mediaSegmentsHandler))
-	r.Handle("/Videos/{itemid}/{stream}", http.HandlerFunc(j.videoStreamHandler))
+	r.Handle("/Videos/{itemid}/{stream}", m(j.videoStreamHandler))
 
 	r.Handle("/Artists", m(j.artistsHandler)).Methods("GET")
 	r.Handle("/Artists/{name}", m(j.artistHandler)).Methods("GET")

@@ -57,6 +57,9 @@ func New(o *ConfigFile) (*SqliteRepo, error) {
 	if err := dbInitSchema(writeDB); err != nil {
 		return nil, err
 	}
+	if err := applyMigrations(context.Background(), writeDB); err != nil {
+		return nil, err
+	}
 
 	d := &SqliteRepo{
 		dbReadHandle:     dbHandle,
@@ -68,6 +71,21 @@ func New(o *ConfigFile) (*SqliteRepo, error) {
 	d.loadUserDataFromDB()
 
 	return d, nil
+}
+
+// Close releases the database connections opened by New.
+func (s *SqliteRepo) Close() error {
+	var readErr, writeErr error
+	if s.dbReadHandle != nil {
+		readErr = s.dbReadHandle.Close()
+	}
+	if s.dbWriteHandle != nil {
+		writeErr = s.dbWriteHandle.Close()
+	}
+	if readErr != nil {
+		return readErr
+	}
+	return writeErr
 }
 
 // StartBackgroundJobs starts background jobs for the database repository.

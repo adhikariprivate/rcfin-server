@@ -32,7 +32,7 @@ func (j *Jellyfin) showsEpisodesHandler(w http.ResponseWriter, r *http.Request) 
 	// If provided a seasonID, rewrite request for a showID with a seasonID filter
 	if isJFSeasonID(showID) {
 		seasonID := trimPrefix(showID)
-		if _, show, season := j.collections.GetSeasonByID(seasonID); season != nil {
+		if c, show, season := j.collections.GetSeasonByID(seasonID); season != nil && c != nil && j.userCanAccessCollection(r.Context(), reqCtx.User.ID, c.ID) {
 			queryparams.Set("seasonId", showID)
 			showID = show.ID()
 		} else {
@@ -42,8 +42,8 @@ func (j *Jellyfin) showsEpisodesHandler(w http.ResponseWriter, r *http.Request) 
 		log.Printf("showsEpisodesHandler: rewritten seasonID %s request to show request with season filter, showID: %s, seasonID: %s\n", vars["show"], showID, seasonID)
 	}
 
-	_, show := j.collections.GetShowByID(showID)
-	if show == nil {
+	c, show := j.collections.GetShowByID(showID)
+	if show == nil || c == nil || !j.userCanAccessCollection(r.Context(), reqCtx.User.ID, c.ID) {
 		apierror(w, "Show not found", http.StatusNotFound)
 		return
 	}
@@ -81,8 +81,8 @@ func (j *Jellyfin) showsSeasonsHandler(w http.ResponseWriter, r *http.Request) {
 	queryparams := r.URL.Query()
 
 	showID := vars["showid"]
-	_, show := j.collections.GetShowByID(showID)
-	if show == nil {
+	c, show := j.collections.GetShowByID(showID)
+	if show == nil || c == nil || !j.userCanAccessCollection(r.Context(), reqCtx.User.ID, c.ID) {
 		apierror(w, "Show not found", http.StatusNotFound)
 		return
 	}
@@ -161,7 +161,7 @@ func (j *Jellyfin) showsNextUpHandler(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]JFItem, 0, len(nextUpItemIDs))
 	for _, id := range nextUpItemIDs {
-		if _, i, s, e := j.collections.GetEpisodeByID(id); i != nil {
+		if c, i, s, e := j.collections.GetEpisodeByID(id); i != nil && c != nil && j.userCanAccessCollection(r.Context(), reqCtx.User.ID, c.ID) {
 			jfitem, err := j.makeJFItemEpisode(r.Context(), reqCtx.User.ID, e, s.ID(), false)
 			if err == nil && j.applyItemFilter(&jfitem, queryparams) {
 				items = append(items, jfitem)
@@ -322,8 +322,8 @@ func (j *Jellyfin) makeJFSeasonsOverview(ctx context.Context, userID string, sho
 
 // makeJFItemSeason makes a season item
 func (j *Jellyfin) makeJFItemSeason(ctx context.Context, userID string, season *collection.Season, _ string, fulldetails bool) (JFItem, error) {
-	_, show, season := j.collections.GetSeasonByID(season.ID())
-	if season == nil {
+	c, show, season := j.collections.GetSeasonByID(season.ID())
+	if season == nil || c == nil || !j.userCanAccessCollection(ctx, userID, c.ID) {
 		return JFItem{}, errors.New("could not find season")
 	}
 
@@ -436,8 +436,8 @@ func (j *Jellyfin) makeJFEpisodesOverview(ctx context.Context, userID string, se
 
 // makeJFItemEpisode makes an episode item
 func (j *Jellyfin) makeJFItemEpisode(ctx context.Context, userID string, episode *collection.Episode, _ string, fulldetails bool) (JFItem, error) {
-	_, show, season, episode := j.collections.GetEpisodeByID(episode.ID())
-	if episode == nil {
+	c, show, season, episode := j.collections.GetEpisodeByID(episode.ID())
+	if episode == nil || c == nil || !j.userCanAccessCollection(ctx, userID, c.ID) {
 		return JFItem{}, errors.New("could not find episode")
 	}
 

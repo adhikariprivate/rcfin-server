@@ -37,6 +37,10 @@ const (
 //
 // itemsImagesGetHandler serves item images like posters, backdrops and logos
 func (j *Jellyfin) itemsImagesGetHandler(w http.ResponseWriter, r *http.Request) {
+	reqCtx := j.getRequestCtx(w, r)
+	if reqCtx == nil {
+		return
+	}
 	// handle tag-based redirects for item imagery that is external (e.g. external images of actors)
 	// for these we ignore provided item id
 	queryparams := r.URL.Query()
@@ -53,7 +57,12 @@ func (j *Jellyfin) itemsImagesGetHandler(w http.ResponseWriter, r *http.Request)
 
 	switch {
 	case isJFCollectionID(itemID):
-		fallthrough
+		if !j.userCanAccessCollection(r.Context(), reqCtx.User.ID, strings.TrimPrefix(itemID, itemprefix_collection)) {
+			apierror(w, "Item not found", http.StatusNotFound)
+			return
+		}
+		j.serveItemImage(w, r, itemID, imageType)
+		return
 	case isJFCollectionFavoritesID(itemID):
 		fallthrough
 	case isJFCollectionPlaylistID(itemID):
@@ -79,7 +88,7 @@ func (j *Jellyfin) itemsImagesGetHandler(w http.ResponseWriter, r *http.Request)
 	}
 
 	c, i := j.collections.GetItemByID(trimPrefix(itemID))
-	if i == nil {
+	if i == nil || c == nil || !j.userCanAccessCollection(r.Context(), reqCtx.User.ID, c.ID) {
 		apierror(w, "Item not found", http.StatusNotFound)
 		return
 	}
@@ -118,9 +127,17 @@ func (j *Jellyfin) itemsImagesGetHandler(w http.ResponseWriter, r *http.Request)
 //
 // itemsImagesPostHandler stores item images like posters, backdrops and logos
 func (j *Jellyfin) itemsImagesPostHandler(w http.ResponseWriter, r *http.Request) {
+	reqCtx := j.getRequestCtx(w, r)
+	if reqCtx == nil {
+		return
+	}
 	vars := mux.Vars(r)
 	itemID := vars["itemid"]
 	imageType := vars["type"]
+	if c, i := j.collections.GetItemByID(trimPrefix(itemID)); i == nil || c == nil || !j.userCanAccessCollection(r.Context(), reqCtx.User.ID, c.ID) {
+		apierror(w, "Item not found", http.StatusNotFound)
+		return
+	}
 
 	// Validate item ID is provided
 	if itemID == "" {
@@ -276,10 +293,14 @@ func (j *Jellyfin) StudiosImagesPostHandler(w http.ResponseWriter, r *http.Reque
 //
 // itemsImagesHandler returns a list of images for an item
 func (j *Jellyfin) itemsImagesHandler(w http.ResponseWriter, r *http.Request) {
+	reqCtx := j.getRequestCtx(w, r)
+	if reqCtx == nil {
+		return
+	}
 	vars := mux.Vars(r)
 	itemID := vars["itemid"]
-	_, i := j.collections.GetItemByID(trimPrefix(itemID))
-	if i == nil {
+	c, i := j.collections.GetItemByID(trimPrefix(itemID))
+	if i == nil || c == nil || !j.userCanAccessCollection(r.Context(), reqCtx.User.ID, c.ID) {
 		apierror(w, "Item not found", http.StatusNotFound)
 		return
 	}
