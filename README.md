@@ -68,16 +68,18 @@ movies/
     └── Movie 2 (2001).mp4
 ```
 
-TV libraries have a directory per show and season directories containing episode files:
+TV libraries have a directory per show and `S<number>` season directories. Episode filenames must include a separator and text after the season/episode number; for example, `S01E01 - Pilot.mp4` (a bare `S01E01.mp4` is not recognized by the current parser):
 
 ```text
 tv/
 └── Show Name/
     ├── tvshow.nfo
-    └── Season 1/
-        ├── Show Name S01E01.mp4
-        └── Show Name S01E02.mp4
+    └── S01/
+        ├── Show Name S01E01 - Pilot.mp4
+        └── Show Name S01E02 - Second Episode.mp4
 ```
+
+See [TV library naming and sidecar files](docs/media-layout.md) for supported video extensions, episode patterns, subtitles, NFO files, and artwork.
 
 Nested movie grouping directories and mixed movie/show layouts in one collection are not supported. Add each root as its own collection.
 
