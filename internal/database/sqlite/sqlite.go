@@ -32,7 +32,7 @@ type SqliteRepo struct {
 
 // ConfigFile holds configuration options
 type ConfigFile struct {
-	Filename string `yaml:"filename"`
+	Filename string `mapstructure:"filename" yaml:"filename"`
 }
 
 // New initializes a sqlite database and creates schema if necssary.

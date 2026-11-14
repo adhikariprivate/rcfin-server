@@ -20,6 +20,7 @@ import (
 
 	"github.com/adhikariprivate/rcfin-server/internal/collection"
 	"github.com/adhikariprivate/rcfin-server/internal/database"
+	"github.com/adhikariprivate/rcfin-server/internal/database/postgres"
 	"github.com/adhikariprivate/rcfin-server/internal/database/sqlite"
 	"github.com/adhikariprivate/rcfin-server/internal/imageresize"
 	"github.com/adhikariprivate/rcfin-server/internal/jellyfin"
@@ -44,7 +45,9 @@ type configFile struct {
 	}
 	Cachedir string `mapstructure:"cachedir"`
 	Database struct {
-		Sqlite sqlite.ConfigFile `yaml:"sqlite"`
+		Driver   string            `mapstructure:"driver"`
+		Sqlite   sqlite.ConfigFile `mapstructure:"sqlite" yaml:"sqlite"`
+		Postgres postgres.Config   `mapstructure:"postgres" yaml:"postgres"`
 	} `yaml:"database"`
 	Logfile        string
 	RescanInterval string `mapstructure:"rescan_interval"`
@@ -177,18 +180,11 @@ func runServer() {
 		log.Fatalf("invalid collections: %v", err)
 	}
 	log.Printf("dbinit")
-	var repo database.Repository
-	if config.Database.Sqlite.Filename != "" {
-		repo, err = database.New("sqlite", sqlite.ConfigFile{
-			Filename: config.Database.Sqlite.Filename,
-		})
-	}
+	repo, err := openConfiguredDatabase(config)
 	if err != nil {
 		log.Fatalf("database.New: %s", err.Error())
 	}
-	if repo == nil {
-		log.Fatal("database.sqlite.filename is required")
-	}
+	defer repo.Close()
 	repo.StartBackgroundJobs(context.Background())
 	if err := rclonestore.Configure(config.Rclone.Config, config.Rclone.CacheDir); err != nil {
 		log.Fatalf("rclone configuration: %v", err)
@@ -286,6 +282,26 @@ func runServer() {
 		if err := http.ListenAndServe(addr, server); err != nil && err != http.ErrServerClosed {
 			log.Printf("HTTP server stopped: %v", err)
 		}
+	}
+}
+
+func openConfiguredDatabase(config configFile) (database.Repository, error) {
+	driver := strings.ToLower(strings.TrimSpace(config.Database.Driver))
+	if driver == "" {
+		// Preserve compatibility with existing configurations that only define
+		// database.sqlite.filename.
+		driver = "sqlite"
+	}
+	if driver == "postgres" && config.Database.Postgres.URL == "" {
+		config.Database.Postgres.URL = os.Getenv("RCFIN_POSTGRES_URL")
+	}
+	switch driver {
+	case "sqlite":
+		return database.New(driver, config.Database.Sqlite)
+	case "postgres":
+		return database.New(driver, config.Database.Postgres)
+	default:
+		return nil, fmt.Errorf("unsupported database.driver %q (supported: sqlite, postgres)", driver)
 	}
 }
 

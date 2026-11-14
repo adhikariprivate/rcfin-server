@@ -13,8 +13,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/term"
 
+	"github.com/adhikariprivate/rcfin-server/internal/database"
 	"github.com/adhikariprivate/rcfin-server/internal/database/model"
-	"github.com/adhikariprivate/rcfin-server/internal/database/sqlite"
 	"github.com/adhikariprivate/rcfin-server/internal/idhash"
 )
 
@@ -50,10 +50,7 @@ func runManagementCommand(configPath string, args []string) error {
 	if err := validateCollections(config.Collections); err != nil {
 		return fmt.Errorf("invalid collections: %w", err)
 	}
-	if config.Database.Sqlite.Filename == "" {
-		return errors.New("database.sqlite.filename is required")
-	}
-	repo, err := sqlite.New(&config.Database.Sqlite)
+	repo, err := openConfiguredDatabase(config)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
@@ -76,7 +73,7 @@ func runManagementCommand(configPath string, args []string) error {
 	}
 }
 
-func runUserCommand(ctx context.Context, repo *sqlite.SqliteRepo, libraries []collectionConfig, args []string) error {
+func runUserCommand(ctx context.Context, repo database.Repository, libraries []collectionConfig, args []string) error {
 	if len(args) == 0 {
 		return errors.New("usage: rcfin user <add|list|delete|disable|enable|grant-admin|revoke-admin|password|libraries>")
 	}
@@ -271,7 +268,7 @@ func promptPassword(label string) (string, error) {
 	return string(value), err
 }
 
-func getUserByName(ctx context.Context, repo *sqlite.SqliteRepo, username string) (*model.User, error) {
+func getUserByName(ctx context.Context, repo database.Repository, username string) (*model.User, error) {
 	user, err := repo.GetUser(ctx, strings.ToLower(strings.TrimSpace(username)))
 	if errors.Is(err, model.ErrNotFound) {
 		return nil, fmt.Errorf("user %q not found", username)
@@ -282,7 +279,7 @@ func getUserByName(ctx context.Context, repo *sqlite.SqliteRepo, username string
 	return user, nil
 }
 
-func resetUserPassword(ctx context.Context, repo *sqlite.SqliteRepo, user *model.User) error {
+func resetUserPassword(ctx context.Context, repo database.Repository, user *model.User) error {
 	password, err := promptPassword("New password: ")
 	if err != nil {
 		return err
@@ -305,7 +302,7 @@ func resetUserPassword(ctx context.Context, repo *sqlite.SqliteRepo, user *model
 	return revokeUserTokens(ctx, repo, user.ID)
 }
 
-func revokeUserTokens(ctx context.Context, repo *sqlite.SqliteRepo, userID string) error {
+func revokeUserTokens(ctx context.Context, repo database.Repository, userID string) error {
 	tokens, err := repo.GetAccessTokens(ctx, userID)
 	if err != nil {
 		return fmt.Errorf("list user sessions: %w", err)
@@ -318,7 +315,7 @@ func revokeUserTokens(ctx context.Context, repo *sqlite.SqliteRepo, userID strin
 	return nil
 }
 
-func enabledAdminCount(ctx context.Context, repo *sqlite.SqliteRepo, excluding string) int {
+func enabledAdminCount(ctx context.Context, repo database.Repository, excluding string) int {
 	users, err := repo.GetAllUsers(ctx)
 	if err != nil {
 		return 0

@@ -1,6 +1,6 @@
 # Account administration
 
-RCFin accounts are stored in the configured SQLite database. Registration is not available through the API or clients. Create, disable, delete, promote, and grant library access to accounts from the host running RCFin. Run the command as the same OS account that can read the configuration, database, and related files:
+RCFin accounts are stored in the selected SQLite or PostgreSQL database. Registration is not available through the API or clients. Create, disable, delete, promote, and grant library access to accounts from a host that can read the configuration and reach the selected database:
 
 ```sh
 ./bin/rcfin --config /etc/rcfin/rcfin.yaml user list
@@ -59,7 +59,7 @@ Regular accounts begin with no access. Grant or revoke one library at a time, an
 
 Use the IDs printed by `library list`. A grant applies to the full library, including its items, metadata, artwork, and direct media stream. Administrators always bypass library grants, can download content, and see all libraries. Grants for IDs absent from the active configuration do not expose anything; they can take effect again if that same stable ID is configured later.
 
-The `v1.1.0` database migration revokes the prior implicit all-library access for existing non-admin accounts. Existing administrator status is preserved. After upgrading, explicitly grant each regular user the libraries they should see. Back up the SQLite database before upgrading, as with any database migration.
+The `v1.1.0` database migration revokes the prior implicit all-library access for existing non-admin accounts. Existing administrator status is preserved. After upgrading, explicitly grant each regular user the libraries they should see. Back up the selected database before upgrading, as with any database migration.
 
 ## Password changes in clients
 
@@ -67,7 +67,7 @@ Signed-in users may change their own password using a compatible Jellyfin client
 
 ## Security and operating notes
 
-- Treat the SQLite database as private account data. It contains password hashes, sessions, grants, and user state.
+- Treat the selected database as private account data. It contains password hashes, sessions, grants, and user state.
 - Keep the configuration and database writable only by the RCFin service account and trusted operators.
 - CLI commands use the database path in the selected config and apply pending database migrations before operating.
 - Disabling an account blocks password and token authentication and revokes its stored sessions.

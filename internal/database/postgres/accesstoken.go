@@ -1,0 +1,225 @@
+package postgres
+
+import (
+	"context"
+	"log"
+	"time"
+
+	"github.com/jmoiron/sqlx"
+
+	"github.com/adhikariprivate/rcfin-server/internal/database/model"
+)
+
+// GetAccessToken returns accesstoken details based upon tokenid.
+func (s *PostgresRepo) GetAccessToken(ctx context.Context, token string) (*model.AccessToken, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Try our in-memory store first
+	if at, ok := s.accessTokenCache[token]; ok {
+		// Update token timestamp so we can keep track of in-use tokens
+		at.LastUsedAt = time.Now().UTC()
+		s.accessTokenCache[token] = at
+		// skip using this: we want to always get the latest token details from the database, as
+		// we update the last used timestamp in memory and want to make sure we have the latest value for that and other fields.
+		//  if we use the cache, we might return stale data.
+		// return at, nil
+	}
+
+	// try database
+	query := `SELECT
+		userid,
+		token,
+		devicename,
+		deviceid,
+		applicationname,
+		applicationversion,
+		remoteaddress,
+		created,
+		lastused FROM accesstokens WHERE token=? LIMIT 1`
+	t, err := s.loadAccessToken(s.dbReadHandle.QueryRowContext(ctx, rebind(query), token))
+	if err != nil {
+		log.Printf("Error retrieving access token from db for token: %s: %s\n", token, err)
+		return nil, model.ErrNotFound
+	}
+
+	// cache it
+	t.LastUsedAt = time.Now().UTC()
+	s.accessTokenCache[token] = t
+
+	return t, nil
+}
+
+func (s *PostgresRepo) GetAccessTokenByDeviceID(ctx context.Context, deviceID string) (*model.AccessToken, error) {
+	query := `SELECT
+		userid,
+		token,
+		devicename,
+		deviceid,
+		applicationname,
+		applicationversion,
+		remoteaddress,
+		created,
+		lastused FROM accesstokens WHERE deviceid=? LIMIT 1`
+	t, err := s.loadAccessToken(s.dbReadHandle.QueryRowContext(ctx, rebind(query), deviceID))
+	if err != nil {
+		log.Printf("Error retrieving access token from db for deviceID: %s: %s\n", deviceID, err)
+		return nil, model.ErrNotFound
+	}
+
+	// cache it
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	t.LastUsedAt = time.Now().UTC()
+	s.accessTokenCache[t.Token] = t
+
+	return t, nil
+}
+
+// GetAccessTokens returns all access tokens for a user.
+func (s *PostgresRepo) GetAccessTokens(ctx context.Context, userID string) ([]model.AccessToken, error) {
+	query := `SELECT userid, token, devicename,	deviceid, applicationname, applicationversion, remoteaddress, created, lastused FROM accesstokens WHERE userid=?`
+	rows, err := s.dbReadHandle.QueryxContext(ctx, rebind(query), userID)
+	if err != nil {
+		log.Printf("Error retrieving access tokens from db for userID: %s: %s\n", userID, err)
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tokens []model.AccessToken
+	for rows.Next() {
+		if token, err := s.loadAccessToken(rows); err == nil {
+			tokens = append(tokens, *token)
+		} else {
+			log.Printf("Error loading access token from db: %s\n", err)
+		}
+	}
+	return tokens, rows.Err()
+}
+
+func (s *PostgresRepo) loadAccessToken(scanner sqlScanner) (*model.AccessToken, error) {
+	var t model.AccessToken
+	if err := scanner.Scan(
+		&t.UserID,
+		&t.Token,
+		&t.DeviceName,
+		&t.DeviceID,
+		&t.ApplicationName,
+		&t.ApplicationVersion,
+		&t.RemoteAddress,
+		&t.CreatedAt,
+		&t.LastUsedAt); err != nil {
+		return nil, model.ErrNotFound
+	}
+	return &t, nil
+}
+
+// UpsertAccessToken upserts a token.
+func (s *PostgresRepo) UpsertAccessToken(ctx context.Context, t model.AccessToken) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Store accesstoken in database
+	tx, err := s.dbReadHandle.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if err := s.storeAccessToken(ctx, tx, t); err != nil {
+		return err
+	}
+
+	// Commit transaction before storing in memory to ensure it is persisted
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	// Store accesstoken in cache
+	s.accessTokenCache[t.Token] = &t
+
+	return nil
+}
+
+// DeleteAccessToken deletes an access token from the database and cache.
+func (s *PostgresRepo) DeleteAccessToken(ctx context.Context, token string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	const query = `DELETE FROM accesstokens WHERE token = ?;`
+	_, err := s.dbWriteHandle.ExecContext(ctx, rebind(query), token)
+	if err != nil {
+		log.Printf("Error deleting access token from db for token: %s: %s\n", token, err)
+		return err
+	}
+
+	// Remove from cache
+	delete(s.accessTokenCache, token)
+	return nil
+}
+
+// accessTokenBackgroundJob writes changed accesstokens to database.
+func (s *PostgresRepo) accessTokenBackgroundJob(ctx context.Context, interval time.Duration) {
+	if s.dbReadHandle == nil || s.dbWriteHandle == nil {
+		log.Fatal(model.ErrNoDbHandle)
+	}
+
+	for {
+		if err := s.writeChangedAccessTokensToDB(ctx); err != nil {
+			log.Printf("Error writing access tokens to db: %s\n", err)
+		}
+		time.Sleep(interval)
+	}
+}
+
+// writeChangedAccessTokensToDB writes updated access tokens to db to persist last use date.
+func (s *PostgresRepo) writeChangedAccessTokensToDB(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.dbWriteHandle.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	for _, value := range s.accessTokenCache {
+		if value.LastUsedAt.After(s.accessTokenCacheSyncTime) {
+			if err := s.storeAccessToken(ctx, tx, *value); err != nil {
+				return err
+			}
+		}
+	}
+	// Update sync time so we only write changed entries next time
+	s.accessTokenCacheSyncTime = time.Now().UTC()
+	return tx.Commit()
+}
+
+// storeAccessToken stores an access token in the database
+func (s *PostgresRepo) storeAccessToken(ctx context.Context, tx *sqlx.Tx, t model.AccessToken) error {
+	const query = `INSERT INTO accesstokens (
+		userid,
+		token,
+		deviceid,
+		devicename,
+		applicationname,
+		applicationversion,
+		remoteaddress,
+		created,
+		lastused) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(userid, token) DO UPDATE SET deviceid=EXCLUDED.deviceid, devicename=EXCLUDED.devicename, applicationname=EXCLUDED.applicationname, applicationversion=EXCLUDED.applicationversion, remoteaddress=EXCLUDED.remoteaddress, created=EXCLUDED.created, lastused=EXCLUDED.lastused`
+	_, err := tx.ExecContext(ctx, rebind(query),
+		t.UserID,
+		t.Token,
+		t.DeviceID,
+		t.DeviceName,
+		t.ApplicationName,
+		t.ApplicationVersion,
+		t.RemoteAddress,
+		t.CreatedAt,
+		t.LastUsedAt)
+
+	// if err != nil {
+	// 	log.Printf("Error storing access token to db for userID: %s, token: %s: %s\n", t.UserID, t.Token, err)
+	// }
+	return err
+}

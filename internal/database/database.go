@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/adhikariprivate/rcfin-server/internal/database/model"
+	"github.com/adhikariprivate/rcfin-server/internal/database/postgres"
 	"github.com/adhikariprivate/rcfin-server/internal/database/sqlite"
 )
 
@@ -19,6 +20,7 @@ type Repository interface {
 	PersonRepo
 	ImageRepo
 	StartBackgroundJobs(ctx context.Context)
+	Close() error
 }
 
 // UserRepo defines the interface for user database operations
@@ -114,9 +116,18 @@ func New(t string, o any) (Repository, error) {
 			return sqlite.New(v)
 		}
 		return nil, fmt.Errorf("invalid config for sqlite database")
+	case "postgres":
+		switch v := o.(type) {
+		case postgres.Config:
+			return postgres.New(v)
+		case *postgres.Config:
+			if v == nil {
+				return nil, fmt.Errorf("invalid config for postgres database")
+			}
+			return postgres.New(*v)
+		}
+		return nil, fmt.Errorf("invalid config for postgres database")
 	default:
 		return nil, fmt.Errorf("unknown database type: %s", t)
 	}
 }
-
-// cannot use sqlite.New(&v) (value of type *sqlite.SqliteRepo) as Repository value in return statement: *sqlite.SqliteRepo does not implement Repository (missing method GetQuickConnectCode)

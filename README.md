@@ -1,13 +1,13 @@
 # RCFin
 
-RCFin is a lightweight media server that exposes a partial Jellyfin-compatible API. It scans movie and TV-show libraries, reads Kodi-style NFO metadata, keeps user and library state in a local SQLite database, and serves original media files to compatible clients.
+RCFin is a lightweight media server that exposes a partial Jellyfin-compatible API. It scans movie and TV-show libraries, reads Kodi-style NFO metadata, stores user and library state in SQLite or PostgreSQL, and serves original media files to compatible clients.
 
 RCFin is a fork of [Jellofin Server](https://github.com/erikbos/jellofin-server). RCFin continues that project as a separately named fork and uses Jellyfin as its client-facing API.
 
 ## Features and compatibility
 
 - **Jellyfin API compatibility:** Partial. Implemented areas include authentication and user management, Quick Connect, library and item browsing, movie and TV metadata, search, artwork, playback information, direct video streaming, and user playback state. The implementation returns Jellyfin-shaped responses for these supported routes; it does not implement the complete Jellyfin API. Unsupported operations include transcoding, remuxing, and Jellyfin features or endpoints not implemented by RCFin.
-- **Media storage:** Media files are accessed through an embedded Rclone VFS; no FUSE mount or external Rclone process is required. Rclone v1.76.0 upstreams are compiled into the binary. Each library selects its own remote from a global Rclone config file and can set independent VFS options. SQLite and application caches remain local. See [`docs/`](docs/index.md) for setup, supported options, caching, and tuning.
+- **Media storage:** Media files are accessed through an embedded Rclone VFS; no FUSE mount or external Rclone process is required. Rclone v1.76.0 upstreams are compiled into the binary. Each library selects its own remote from a global Rclone config file and can set independent VFS options. SQLite is local; PostgreSQL can be remote. Application caches remain local and rebuildable. See [`docs/`](docs/index.md) for setup, supported options, caching, and tuning.
 - **Transcoding:** Not supported. RCFin serves original media files and does not transcode or remux them.
 - **Notflix:** Not supported. Notflix API compatibility has been removed.
 
@@ -33,12 +33,14 @@ cp rcfin.example.yaml rcfin.yaml
 ./bin/rcfin --config rcfin.yaml
 ```
 
-Edit `rcfin.yaml` before starting the server. Set the SQLite filename and global Rclone config/cache paths. `rclone.config` must name the actual Rclone INI file, including its filename. Set each collection's `remote` to a configured `remote:path` such as `files:HTPC/Movies`. SQLite and caches remain local. The default HTTP port is `8096`.
+Edit `rcfin.yaml` before starting the server. Choose SQLite or PostgreSQL under `database`; PostgreSQL connection details can be supplied using `RCFIN_POSTGRES_URL`. Set the global Rclone config/cache paths. `rclone.config` must name the actual Rclone INI file, including its filename. Set each collection's `remote` to a configured `remote:path` such as `files:HTPC/Movies`. Caches remain local. The default HTTP port is `8096`.
 
 ## Configuration
 
 - `listen`: bind address, port, optional TLS certificate and key, and optional IP allow list.
+- `database.driver`: `sqlite` (default for existing configs) or `postgres`.
 - `database.sqlite.filename`: local SQLite database path.
+- `database.postgres.url`: PostgreSQL connection URL; `RCFIN_POSTGRES_URL` is used when this is empty.
 - `cachedir`: local image cache path.
 - `rclone`: global config-file path and local VFS cache root.
 - `rescan_interval`: application library refresh interval (default `30m`).
@@ -48,9 +50,11 @@ Edit `rcfin.yaml` before starting the server. Set the SQLite filename and global
 
 See [`rcfin.example.yaml`](rcfin.example.yaml) for a complete example and [`docs/configuration.md`](docs/configuration.md) for field definitions.
 
+See [`docs/database.md`](docs/database.md) for PostgreSQL credentials, container persistence, and database migration behavior.
+
 ## User accounts and sign-in
 
-RCFin stores manually managed accounts in its local SQLite database. There is no sign-up flow and no default account. Create the first administrator and manage users and library grants with the CLI commands documented in [Account administration](docs/accounts.md). New regular users start with no library access; administrators can access every library. Existing non-admin accounts lose their previous all-library access on the `v1.1.0` database migration, and must be granted access explicitly. Users can change their own passwords in compatible clients. Quick Connect is disabled unless `jellyfin.quick_connect` is enabled.
+RCFin stores manually managed accounts in its selected database. There is no sign-up flow and no default account. Create the first administrator and manage users and library grants with the CLI commands documented in [Account administration](docs/accounts.md). New regular users start with no library access; administrators can access every library. Existing non-admin accounts lose their previous all-library access on the `v1.1.0` database migration, and must be granted access explicitly. Users can change their own passwords in compatible clients. Quick Connect is disabled unless `jellyfin.quick_connect` is enabled.
 
 ## Library layout
 

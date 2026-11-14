@@ -12,11 +12,15 @@ ${EDITOR:-vi} rcfin.yaml
 ./rcfin --config rcfin.yaml
 ```
 
-Create the parent directories for the SQLite database and local caches before startup, and ensure the RCFin process user can write to them. For example:
+When using SQLite, create the parent directory for its database file. For either driver, create local cache directories before startup and ensure the RCFin process user can write to them. For example:
 
 ```sh
 install -d -o rcfin -g rcfin /var/lib/rcfin /var/cache/rcfin/images /var/cache/rcfin/rclone
 ```
+
+For PostgreSQL, set `database.driver: postgres` and provide a PostgreSQL connection URL in `database.postgres.url` or `RCFIN_POSTGRES_URL`. For example, configure the URL as a deployment secret and leave the YAML value empty. RCFin creates its tables and applies its database migration on startup, so the database role needs permission to create tables and indexes in the selected schema. The server and account-management CLI use the same selected database.
+
+See [Database backends](database.md) for connection URL guidance, which data must persist, playback write behavior, and the SQLite-to-PostgreSQL limitation.
 
 ## Rclone config path and library remote
 
@@ -54,7 +58,9 @@ Use the normal Rclone tooling to create and verify remote sections. RCFin embeds
 | `logfile` | `stdout` (default), `stderr`, `none`, or a writable log file path. |
 | `cachedir` | Local artwork resize cache directory. |
 | `rescan_interval` | Positive Go duration for periodic library rescans; default `30m`. |
+| `database.driver` | `sqlite` (default for existing configurations) or `postgres`. |
 | `database.sqlite.filename` | Local SQLite database file path. |
+| `database.postgres.url` | PostgreSQL connection URL. If empty, RCFin reads `RCFIN_POSTGRES_URL` from the environment. |
 | `rclone.config` | Optional full path to the Rclone INI config file. |
 | `rclone.cache_dir` | Local root directory for VFS cache data. |
 | `jellyfin.server_id` | Optional stable server ID. Leave empty to let RCFin generate one. |
@@ -67,7 +73,7 @@ Use the normal Rclone tooling to create and verify remote sections. RCFin embeds
 | `collections[].remote` | Rclone remote path, e.g. `files:HTPC/Movies`. This key is named `remote`, not `directory`. |
 | `collections[].vfs` | Per-collection Rclone VFS options. See the [VFS reference](vfs-options.md). |
 
-The SQLite database, artwork cache, and Rclone VFS cache are local data. The media itself is accessed through Rclone. The selected VFS cache mode and limits determine how much local disk can be used for media reads.
+The SQLite database is local. With PostgreSQL selected, durable application records live in PostgreSQL. Artwork resize and Rclone VFS caches remain local and rebuildable with either driver. The media itself is accessed through Rclone. The selected VFS cache mode and limits determine how much local disk can be used for media reads. PostgreSQL starts with its own empty schema; this change does not import existing SQLite data.
 
 For compatibility, existing configs may continue using the compact Jellyfin keys `servername` and `imagequalityposter`. New configs should use `server_name` and `image_quality_poster` as shown in the example. Every collection must have a unique `id` made of letters, digits, `_` or `-`; account library grants refer to this ID, never the display name. User registration is not supported; create users with the RCFin CLI. See [account administration](accounts.md).
 

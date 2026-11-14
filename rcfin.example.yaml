@@ -22,8 +22,14 @@ cachedir: /var/cache/rcfin/images
 rescan_interval: 30m
 
 database:
+  # Supported drivers: sqlite (default) and postgres.
+  driver: sqlite
   sqlite:
     filename: /var/lib/rcfin/rcfin.db
+  # For PostgreSQL, set driver: postgres and provide url here or through
+  # RCFIN_POSTGRES_URL. Prefer the environment variable for credentials.
+  postgres:
+    url: ""
 
 # This is the full path to the Rclone INI config file, including its filename.
 # It is not the directory containing that file. The file should define every
