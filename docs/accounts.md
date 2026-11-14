@@ -16,7 +16,7 @@ Create an administrator during initial setup. The first account is not created a
 ./bin/rcfin --config /etc/rcfin/rcfin.yaml user add --username admin --admin
 ```
 
-The command prompts twice for the password. An administrator can see every configured library and manage all accounts from the CLI. RCFin does not offer user registration or API-based account creation/deletion.
+The command prompts twice for the password. An administrator can see every configured library, download content, and manage all accounts from the CLI. RCFin does not offer user registration or API-based account creation/deletion.
 
 ## User commands
 
@@ -57,7 +57,7 @@ Regular accounts begin with no access. Grant or revoke one library at a time, an
 ./bin/rcfin --config /etc/rcfin/rcfin.yaml user libraries sam revoke movies
 ```
 
-Use the IDs printed by `library list`. A grant applies to the full library, including its items, metadata, artwork, and direct media stream. Administrators always bypass library grants and see all libraries. Grants for IDs absent from the active configuration do not expose anything; they can take effect again if that same stable ID is configured later.
+Use the IDs printed by `library list`. A grant applies to the full library, including its items, metadata, artwork, and direct media stream. Administrators always bypass library grants, can download content, and see all libraries. Grants for IDs absent from the active configuration do not expose anything; they can take effect again if that same stable ID is configured later.
 
 The `v1.1.0` database migration revokes the prior implicit all-library access for existing non-admin accounts. Existing administrator status is preserved. After upgrading, explicitly grant each regular user the libraries they should see. Back up the SQLite database before upgrading, as with any database migration.
 

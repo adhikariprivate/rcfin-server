@@ -190,6 +190,7 @@ func runUserCommand(ctx context.Context, repo *sqlite.SqliteRepo, libraries []co
 		case "grant-admin":
 			user.Properties.Admin = true
 			user.Properties.EnableAllFolders = true
+			user.Properties.EnableDownloads = true
 			if err := repo.UpsertUser(ctx, user); err != nil {
 				return fmt.Errorf("promote user: %w", err)
 			}
