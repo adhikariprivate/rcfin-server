@@ -3,7 +3,7 @@ go = "1.26.0"
 
 [tasks.build]
 description = "Build the RCFin server"
-run = "mkdir -p bin && go build -o bin/rcfin ."
+run = "mkdir -p bin && go build -o bin/rcfin ./cmd/rcfin-server"
 
 [tasks.test]
 description = "Run the Go test suite"
@@ -11,4 +11,4 @@ run = "go test ./..."
 
 [tasks.run]
 description = "Run RCFin with the local configuration"
-run = "go run . --config rcfin.yaml"
+run = "go run ./cmd/rcfin-server --config rcfin.yaml"

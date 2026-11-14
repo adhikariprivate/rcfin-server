@@ -9,6 +9,14 @@ Thanks for considering a contribution. Changes should preserve the server's Jell
 3. Copy `rcfin.example.yaml` to `rcfin.yaml` and configure a local SQLite path and filesystem library roots.
 4. Run `mise run build` to compile the server or `mise run test` to run the Go test suite.
 
+## Repository structure
+
+- `cmd/rcfin-server` contains the executable entry point and server startup wiring.
+- `internal/` contains RCFin's application packages, including collection scanning, database implementations, Jellyfin handlers, image caching, and Rclone storage.
+- `docs/` contains operator and architecture documentation.
+
+The Go `internal` boundary keeps implementation packages private to this module. There is no `pkg/` directory because RCFin does not currently publish a reusable Go library API; add one only when a package is intentionally supported for use by other modules.
+
 The `rcfin.yaml` file is ignored by Git. Do not commit credentials, private library paths, or generated database/cache files.
 
 ## Before opening a change

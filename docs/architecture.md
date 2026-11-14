@@ -1,5 +1,7 @@
 # Storage architecture
 
+The executable lives in `cmd/rcfin-server`. Application packages live under `internal/`, where Go restricts their use to this module. RCFin does not currently expose a public Go library package.
+
 RCFin uses the Rclone Go SDK rather than shelling out to `rclone` or mounting a filesystem.
 
 1. Startup configures Rclone's global config-file path and local cache root.
