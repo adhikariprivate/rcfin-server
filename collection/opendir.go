@@ -1,135 +1,95 @@
-// OpenDir is like Open(), but the Readdir() os.FileInfo
-// results are lazy-loaded.
+// OpenDir is the collection scanner's read-only directory interface over an
+// rclone-backed library.
 package collection
 
 import (
 	"errors"
 	"os"
-	"path"
 	"time"
 
-	"github.com/djherbis/times"
+	"github.com/adhikariprivate/rcfin-server/rclonestore"
 )
 
 type Dir struct {
-	name string
-	file *os.File
+	store   *rclonestore.Library
+	name    string
+	entries []FileInfo
+	read    bool
+	index   int
 }
 
 type FileInfo struct {
-	dir        *Dir
-	name       string
-	size       int64
-	mode       os.FileMode
-	modtime    time.Time
-	createtime time.Time
-	isdir      bool
-	didstat    bool
+	info os.FileInfo
 }
 
 var ErrNotDirectory = errors.New("not a directory")
 
-func OpenDir(name string) (dir *Dir, err error) {
-	f, err := os.Open(name)
-	if err != nil {
-		return
+func OpenDir(store *rclonestore.Library, name string) (*Dir, error) {
+	if store == nil {
+		return nil, errors.New("collection has no rclone filesystem")
 	}
-	fi, _ := f.Stat()
-	if !fi.IsDir() {
-		err = &os.PathError{
-			Op:   "Opendir",
-			Path: name,
-			Err:  ErrNotDirectory,
-		}
-		return
-	}
-	dir = &Dir{
-		name: name,
-		file: f,
-	}
-	return
+	return &Dir{store: store, name: name}, nil
 }
 
-func (dir *Dir) Close() error {
-	return dir.file.Close()
-}
+func (dir *Dir) Close() error { return nil }
 
 func (dir *Dir) Stat() (os.FileInfo, error) {
-	return dir.file.Stat()
+	return dir.store.Stat(dir.name)
 }
 
-func (dir *Dir) Readdirnames(n int) (names []string, err error) {
-	return dir.file.Readdirnames(n)
-}
-
-func (dir *Dir) Readdir(n int) (fi []FileInfo, err error) {
-	names, err := dir.Readdirnames(n)
+func (dir *Dir) load() error {
+	if dir.read {
+		return nil
+	}
+	dir.read = true
+	entries, err := dir.store.ReadDir(dir.name)
 	if err != nil {
-		return
+		return err
 	}
-	fi = make([]FileInfo, len(names))
-	for i := range names {
-		fi[i].dir = dir
-		fi[i].name = names[i]
+	dir.entries = make([]FileInfo, len(entries))
+	for i, entry := range entries {
+		dir.entries[i] = FileInfo{info: entry}
 	}
-	return
+	return nil
 }
 
-func (fi *FileInfo) Name() string {
-	return fi.name
-}
-
-func (fi *FileInfo) Size() int64 {
-	fi.stat()
-	return fi.size
-}
-
-func (fi *FileInfo) Mode() os.FileMode {
-	fi.stat()
-	return fi.mode
-}
-
-func (fi *FileInfo) Modtime() time.Time {
-	fi.stat()
-	return fi.modtime
-}
-
-func (fi *FileInfo) Createtime() time.Time {
-	fi.stat()
-	return fi.createtime
-}
-
-func (fi *FileInfo) CreatetimeMS() int64 {
-	fi.stat()
-	return fi.createtime.UnixNano() / 1000000
-}
-
-func (fi *FileInfo) IsDir() bool {
-	fi.stat()
-	return fi.isdir
-}
-
-func (fi *FileInfo) stat() {
-	if fi.didstat {
-		return
+func (dir *Dir) Readdirnames(n int) ([]string, error) {
+	if err := dir.load(); err != nil {
+		return nil, err
 	}
-	p := path.Join(fi.dir.name, fi.name)
-	s, err := os.Stat(p)
-	if err != nil {
-		return
+	end := len(dir.entries)
+	if n > 0 && end-dir.index > n {
+		end = dir.index + n
 	}
-
-	fi.size = s.Size()
-	fi.mode = s.Mode()
-	fi.modtime = s.ModTime()
-	fi.isdir = s.IsDir()
-
-	fileTimestamp, err := times.Stat(p)
-	if err != nil {
-		return
+	names := make([]string, 0, end-dir.index)
+	for _, entry := range dir.entries[dir.index:end] {
+		names = append(names, entry.Name())
 	}
-	fi.createtime = fileTimestamp.ChangeTime()
-	fi.modtime = fileTimestamp.ModTime()
-
-	fi.didstat = true
+	dir.index = end
+	return names, nil
 }
+
+func (dir *Dir) Readdir(n int) ([]FileInfo, error) {
+	if err := dir.load(); err != nil {
+		return nil, err
+	}
+	end := len(dir.entries)
+	if n > 0 && end-dir.index > n {
+		end = dir.index + n
+	}
+	entries := append([]FileInfo(nil), dir.entries[dir.index:end]...)
+	dir.index = end
+	return entries, nil
+}
+
+func (fi FileInfo) Name() string       { return fi.info.Name() }
+func (fi FileInfo) Size() int64        { return fi.info.Size() }
+func (fi FileInfo) Mode() os.FileMode  { return fi.info.Mode() }
+func (fi FileInfo) Modtime() time.Time { return fi.info.ModTime() }
+func (fi FileInfo) Createtime() time.Time {
+	// Object stores do not expose a portable creation timestamp. Use the
+	// modification timestamp for the library's date-derived metadata.
+	return fi.info.ModTime()
+}
+func (fi FileInfo) CreatetimeMS() int64 { return fi.Createtime().UnixMilli() }
+func (fi FileInfo) IsDir() bool         { return fi.info.IsDir() }

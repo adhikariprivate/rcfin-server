@@ -2,6 +2,8 @@ package imageresize
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -12,7 +14,6 @@ import (
 	"regexp"
 	"strconv"
 	"sync"
-	"syscall"
 
 	"github.com/disintegration/imaging"
 )
@@ -46,24 +47,22 @@ func param2float(params map[string][]string, param string) (r float64) {
 	return
 }
 
-func cacheName(file http.File) (r string) {
+func cacheName(file http.File, identity string) string {
 	fi, err := file.Stat()
 	if err != nil {
-		return
+		return ""
 	}
-	stat, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok {
-		return
-	}
-	return fmt.Sprintf("%08x.%016x", stat.Dev, stat.Ino)
+	key := fmt.Sprintf("%s\x00%d\x00%d", identity, fi.Size(), fi.ModTime().UnixNano())
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:16])
 }
 
 // get info about the original file (width x height) from the cache.
-func (r *Resizer) cacheReadInfo(file http.File) (w float64, h float64) {
+func (r *Resizer) cacheReadInfo(file http.File, identity string) (w float64, h float64) {
 	if r.cachedir == "" {
 		return
 	}
-	cn := cacheName(file)
+	cn := cacheName(file, identity)
 	if cn == "" {
 		return
 	}
@@ -83,11 +82,11 @@ func (r *Resizer) cacheReadInfo(file http.File) (w float64, h float64) {
 }
 
 // write info about the original file (width x height) to the cache.
-func (r *Resizer) cacheWriteInfo(file http.File, w float64, h float64) {
+func (r *Resizer) cacheWriteInfo(file http.File, identity string, w float64, h float64) {
 	if r.cachedir == "" {
 		return
 	}
-	cn := cacheName(file)
+	cn := cacheName(file, identity)
 	if cn == "" {
 		return
 	}
@@ -108,11 +107,11 @@ func (r *Resizer) cacheWriteInfo(file http.File, w float64, h float64) {
 }
 
 // see if we have the resized file in the cache.
-func (r *Resizer) cacheRead(file http.File, w, h, q uint) (rfile http.File) {
+func (r *Resizer) cacheRead(file http.File, identity string, w, h, q uint) (rfile http.File) {
 	if r.cachedir == "" {
 		return
 	}
-	cn := cacheName(file)
+	cn := cacheName(file, identity)
 	if cn == "" {
 		return
 	}
@@ -125,11 +124,11 @@ func (r *Resizer) cacheRead(file http.File, w, h, q uint) (rfile http.File) {
 }
 
 // store resized file in the cache.
-func (r *Resizer) cacheWrite(file http.File, blob []byte, w, h, q uint) (rfile http.File) {
+func (r *Resizer) cacheWrite(file http.File, identity string, blob []byte, w, h, q uint) (rfile http.File) {
 	if r.cachedir == "" {
 		return
 	}
-	cn := cacheName(file)
+	cn := cacheName(file, identity)
 	if cn == "" {
 		return
 	}
@@ -158,8 +157,8 @@ func (r *Resizer) cacheWrite(file http.File, blob []byte, w, h, q uint) (rfile h
 // If the file is present, an image, and needs to be resized,
 // then we return a handle to the resized image.
 func (r *Resizer) OpenFile(rw http.ResponseWriter, rq *http.Request, name string,
-	imageQuality int) (file http.File, err error) {
-	file, err = os.Open(name)
+	imageQuality int, identity string, opener func(string) (http.File, error)) (file http.File, err error) {
+	file, err = opener(name)
 	if err != nil {
 		return
 	}
@@ -214,7 +213,7 @@ func (r *Resizer) OpenFile(rw http.ResponseWriter, rq *http.Request, name string
 		ch = mh
 	}
 	if cw != 0 && ch != 0 {
-		cf := r.cacheRead(file, uint(cw), uint(ch), uint(q))
+		cf := r.cacheRead(file, identity, uint(cw), uint(ch), uint(q))
 		if cf != nil {
 			file.Close()
 			file = cf
@@ -222,11 +221,11 @@ func (r *Resizer) OpenFile(rw http.ResponseWriter, rq *http.Request, name string
 		}
 	}
 
-	ow, oh := r.cacheReadInfo(file)
+	ow, oh := r.cacheReadInfo(file, identity)
 	if ow == 0 || oh == 0 {
 		img, _, err2 := image.Decode(file)
 		if err2 != nil {
-			return nil, err
+			return nil, err2
 		}
 		ow = float64(img.Bounds().Dx())
 		oh = float64(img.Bounds().Dy())
@@ -234,7 +233,7 @@ func (r *Resizer) OpenFile(rw http.ResponseWriter, rq *http.Request, name string
 		if ow == 0 || oh == 0 {
 			return
 		}
-		r.cacheWriteInfo(file, ow, oh)
+		r.cacheWriteInfo(file, identity, ow, oh)
 	}
 
 	// if we do not have both wanted width and height,
@@ -281,7 +280,7 @@ func (r *Resizer) OpenFile(rw http.ResponseWriter, rq *http.Request, name string
 	}
 
 	// now that we have all parameters, check cache once more.
-	cf := r.cacheRead(file, uint(w), uint(h), uint(q))
+	cf := r.cacheRead(file, identity, uint(w), uint(h), uint(q))
 	if cf != nil {
 		file.Close()
 		file = cf
@@ -329,7 +328,7 @@ func (r *Resizer) OpenFile(rw http.ResponseWriter, rq *http.Request, name string
 	f := NewBlobBytesReader(imageblob, file)
 
 	// Write cache file.
-	cachefh := r.cacheWrite(file, f.blob, uint(w), uint(h), uint(q))
+	cachefh := r.cacheWrite(file, identity, f.blob, uint(w), uint(h), uint(q))
 	if cachefh != nil {
 		f.Close()
 		file.Close()

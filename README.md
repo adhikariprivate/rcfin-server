@@ -7,7 +7,7 @@ RCFin is a fork of [Jellofin Server](https://github.com/erikbos/jellofin-server)
 ## Features and compatibility
 
 - **Jellyfin API compatibility:** Partial. Implemented areas include authentication and user management, Quick Connect, library and item browsing, movie and TV metadata, search, artwork, playback information, direct video streaming, and user playback state. The implementation returns Jellyfin-shaped responses for these supported routes; it does not implement the complete Jellyfin API. Unsupported operations include transcoding, remuxing, and Jellyfin features or endpoints not implemented by RCFin.
-- **Media storage:** The current scanner and media handlers use filesystem paths. Native Rclone-backed storage is planned but is not implemented in this revision; collection roots must still be filesystem paths. No Rclone version compatibility is declared yet. The intended design is to embed Rclone, allow each library to select its own configured upstream, and keep SQLite and caches local.
+- **Media storage:** Media files are accessed through an embedded Rclone VFS; no FUSE mount or external Rclone process is required. Rclone v1.76.0 upstreams are compiled into the binary. Each library selects its own remote from a global Rclone config file and can set independent VFS options. SQLite and application caches remain local. See [`docs/`](docs/index.md) for setup, supported options, caching, and tuning.
 - **Transcoding:** Not supported. RCFin serves original media files and does not transcode or remux them.
 - **Notflix:** Not supported. Notflix API compatibility has been removed.
 
@@ -33,18 +33,20 @@ cp rcfin.example.yaml rcfin.yaml
 ./bin/rcfin --config rcfin.yaml
 ```
 
-Edit `rcfin.yaml` before starting the server. Set the SQLite filename and collection directories to paths available on the host. SQLite remains local. The default HTTP port is `8096`.
+Edit `rcfin.yaml` before starting the server. Set the SQLite filename and global Rclone config/cache paths. Set each collection directory to a configured `remote:path`. SQLite and VFS caches remain local. The default HTTP port is `8096`.
 
 ## Configuration
 
 - `listen`: bind address, port, optional TLS certificate and key, and optional IP allow list.
 - `database.sqlite.filename`: local SQLite database path.
 - `cachedir`: local image cache path.
-- `collections`: library ID, display name, type (`movies` or `shows`), and filesystem directory. The expected Kodi-style folder layouts are described below.
+- `rclone`: global config-file path and local VFS cache root.
+- `rescan_interval`: application library refresh interval (default `30m`).
+- `collections`: library ID, display name, type (`movies` or `shows`), Rclone remote path, and per-library `vfs` options. The expected Kodi-style folder layouts are described below.
 - `jellyfin`: server name and supported user / Quick Connect settings.
 - `logfile`: log destination; use `stdout` or `none` as needed.
 
-See [`rcfin.example.yaml`](rcfin.example.yaml) for a complete example.
+See [`rcfin.example.yaml`](rcfin.example.yaml) for a complete example and [`docs/configuration.md`](docs/configuration.md) for field definitions.
 
 ## Library layout
 
@@ -53,7 +55,7 @@ Movie libraries have one directory per movie, containing the video and optional 
 ```text
 movies/
 ├── Movie 1 (1984)/
-│   ├── Movie 1 (1984).mkv
+│   ├── Movie 1 (1984).mp4
 │   ├── movie.nfo
 │   └── poster.jpg
 └── Movie 2 (2001)/
@@ -67,8 +69,8 @@ tv/
 └── Show Name/
     ├── tvshow.nfo
     └── Season 1/
-        ├── Show Name S01E01.mkv
-        └── Show Name S01E02.mkv
+        ├── Show Name S01E01.mp4
+        └── Show Name S01E02.mp4
 ```
 
 Nested movie grouping directories and mixed movie/show layouts in one collection are not supported. Add each root as its own collection.

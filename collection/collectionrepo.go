@@ -11,32 +11,43 @@ import (
 	"github.com/adhikariprivate/rcfin-server/collection/search"
 	"github.com/adhikariprivate/rcfin-server/database"
 	"github.com/adhikariprivate/rcfin-server/idhash"
+	"github.com/adhikariprivate/rcfin-server/rclonestore"
 )
 
 // CollectionRepo is a repository holding content collections.
 type CollectionRepo struct {
-	collections Collections
-	repo        database.Repository
-	bleveIndex  *search.Search
+	collections    Collections
+	repo           database.Repository
+	bleveIndex     *search.Search
+	rescanInterval time.Duration
 }
 
 type Options struct {
-	Collections []Collection
-	Repo        database.Repository
+	Collections    []Collection
+	Repo           database.Repository
+	RescanInterval time.Duration
 }
 
 // New creates a new CollectionRepo with the provided options.
 func New(options *Options) *CollectionRepo {
 	c := &CollectionRepo{
-		collections: options.Collections,
-		repo:        options.Repo,
+		collections:    options.Collections,
+		repo:           options.Repo,
+		rescanInterval: options.RescanInterval,
 	}
 	return c
 }
 
+// Close releases the VFS resources owned by each configured library.
+func (cr *CollectionRepo) Close() {
+	for i := range cr.collections {
+		cr.collections[i].Storage.Close()
+	}
+}
+
 // AddCollection adds a new content collection to the repository.
 func (cr *CollectionRepo) AddCollection(name string, ID string,
-	collectiontype string, directory string, baseUrl string, hlsServer string) {
+	collectiontype string, remote string, storage *rclonestore.Library) {
 
 	var ct CollectionType
 	switch collectiontype {
@@ -50,19 +61,18 @@ func (cr *CollectionRepo) AddCollection(name string, ID string,
 	}
 
 	c := Collection{
-		Name:      name,
-		ID:        ID,
-		Type:      ct,
-		Directory: directory,
-		// BaseUrl:   baseUrl,
-		HlsServer: hlsServer,
+		Name:    name,
+		ID:      ID,
+		Type:    ct,
+		Remote:  remote,
+		Storage: storage,
 	}
 	// If no collection ID is provided, generate one based upon the name.
 	if c.ID == "" {
 		c.ID = idhash.IdHash(c.Name)
 	}
 
-	log.Printf("Adding collection %s, id: %s, type: %s, directory: %s\n", c.Name, c.ID, c.Type, c.Directory)
+	log.Printf("Adding collection %s, id: %s, type: %s, remote: %s\n", c.Name, c.ID, c.Type, c.Remote)
 
 	cr.collections = append(cr.collections, c)
 }
@@ -78,21 +88,42 @@ func (cr *CollectionRepo) Init() {
 
 // Background keeps scanning the repository for content changes continously.
 func (cr *CollectionRepo) Background(ctx context.Context) {
+	interval := cr.rescanInterval
+	if interval <= 0 {
+		interval = 30 * time.Minute
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 		log.Printf("Background collection update..")
-		// scan all collections with delay
-		cr.updateCollections(500 * time.Millisecond)
-		// Rebuild search index to ensure any new items are included
-		cr.BuildSearchIndex(ctx)
+		cr.Refresh(ctx)
 	}
 }
 
-// updateCollections updates the collections with the latest content from file system.
+// Refresh rescans every collection immediately and rebuilds the search
+// index. Directory caches are flushed first so the scan observes current
+// remote state regardless of the configured dir cache time.
+func (cr *CollectionRepo) Refresh(ctx context.Context) {
+	log.Printf("Manual collection refresh..")
+	cr.updateCollections(0)
+	cr.BuildSearchIndex(ctx)
+}
+
+// updateCollections updates the collections with the latest content from remote storage.
 // - ScanInterval can be set as wait time between loading details of individual items.
-// This can be useful to avoid overloading the filesystem with too many requests.
+// This can be useful to avoid overloading the remote with too many requests.
 func (cr *CollectionRepo) updateCollections(scanInterval time.Duration) {
 	for i := range cr.collections {
 		c := &(cr.collections[i])
+		// Drop cached listings so each rescan observes current remote state.
+		if c.Storage != nil {
+			c.Storage.FlushDirCache()
+		}
 		switch c.Type {
 		case CollectionTypeMovies:
 			cr.buildMovies(c, scanInterval)

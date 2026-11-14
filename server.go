@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +22,7 @@ import (
 	"github.com/adhikariprivate/rcfin-server/imageresize"
 	"github.com/adhikariprivate/rcfin-server/jellyfin"
 	"github.com/adhikariprivate/rcfin-server/muxnormalizer"
+	"github.com/adhikariprivate/rcfin-server/rclonestore"
 )
 
 type configFile struct {
@@ -34,18 +34,21 @@ type configFile struct {
 		IPACL   string
 	}
 	Cachedir string
-	Dbdir    string
 	Database struct {
 		Sqlite sqlite.ConfigFile `yaml:"sqlite"`
 	} `yaml:"database"`
-	Logfile     string
+	Logfile        string
+	RescanInterval string `mapstructure:"rescan_interval"`
+	Rclone         struct {
+		Config   string `mapstructure:"config"`
+		CacheDir string `mapstructure:"cache_dir"`
+	} `mapstructure:"rclone"`
 	Collections []struct {
-		ID        string
-		Name      string
-		Type      string
-		Directory string
-		BaseUrl   string
-		HlsServer string
+		ID     string
+		Name   string
+		Type   string
+		Remote string
+		VFS    map[string]any `mapstructure:"vfs"`
 	}
 	Jellyfin struct {
 		ServerID           string
@@ -98,12 +101,6 @@ func main() {
 	log.Printf("dbinit")
 	var err error
 	var repo database.Repository
-	// Legacy support for Dbdir
-	if config.Dbdir != "" {
-		repo, err = database.New("sqlite", sqlite.ConfigFile{
-			Filename: path.Join(config.Dbdir, "tink-items.db"),
-		})
-	}
 	if config.Database.Sqlite.Filename != "" {
 		repo, err = database.New("sqlite", sqlite.ConfigFile{
 			Filename: config.Database.Sqlite.Filename,
@@ -113,29 +110,44 @@ func main() {
 		log.Fatalf("database.New: %s", err.Error())
 	}
 	repo.StartBackgroundJobs(context.Background())
+	if err := rclonestore.Configure(config.Rclone.Config, config.Rclone.CacheDir); err != nil {
+		log.Fatalf("rclone configuration: %v", err)
+	}
+	rescanInterval := 30 * time.Minute
+	if config.RescanInterval != "" {
+		rescanInterval, err = time.ParseDuration(config.RescanInterval)
+		if err != nil || rescanInterval <= 0 {
+			log.Fatalf("invalid rescaninterval %q: expected a positive duration", config.RescanInterval)
+		}
+	}
 
 	// Initialize collection and add them to the collection manager
 	collection := collection.New(&collection.Options{
-		Repo: repo,
+		Repo:           repo,
+		RescanInterval: rescanInterval,
 	})
 	for _, coll := range config.Collections {
+		storage, err := rclonestore.New(context.Background(), coll.Remote, coll.VFS)
+		if err != nil {
+			log.Fatalf("collection %q: %v", coll.Name, err)
+		}
 		collection.AddCollection(
 			coll.Name,
 			coll.ID,
 			coll.Type,
-			coll.Directory,
-			coll.BaseUrl,
-			coll.HlsServer,
+			coll.Remote,
+			storage,
 		)
 	}
+	defer collection.Close()
 
 	resizer := imageresize.New(imageresize.Options{
 		Cachedir: config.Cachedir,
 	})
-	// XXX FIXME
-	// if config.cachedir != "" {
-	// 	go cleanCache(*datadir, config.cachedir, time.Hour)
-	// }
+	// Periodically evict stale entries from the local resized-image cache.
+	if config.Cachedir != "" {
+		go resizer.CleanCache(7*24*time.Hour, time.Hour)
+	}
 
 	log.Printf("building mux")
 
@@ -187,10 +199,14 @@ func main() {
 			},
 		}
 		log.Printf("Serving HTTPS on %s", addr)
-		log.Fatal(srv.ListenAndServeTLS("", ""))
+		if err := srv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+			log.Printf("HTTPS server stopped: %v", err)
+		}
 	} else {
 		log.Printf("Serving HTTP on %s", addr)
-		log.Fatal(http.ListenAndServe(addr, server))
+		if err := http.ListenAndServe(addr, server); err != nil && err != http.ErrServerClosed {
+			log.Printf("HTTP server stopped: %v", err)
+		}
 	}
 }
 

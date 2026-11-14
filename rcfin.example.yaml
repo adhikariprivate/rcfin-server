@@ -1,7 +1,14 @@
 listen:
   port: 8096
 
-cachedir: /var/tmp/rcfin-img-cache
+# SQLite and application image-resize cache stay on local storage.
+cachedir: /var/cache/rcfin/images
+rescan_interval: 30m
+
+# Rclone config is global. Each collection below selects a configured remote.
+rclone:
+  config: /etc/rcfin/rclone.conf
+  cache_dir: /var/cache/rcfin/rclone
 database:
   sqlite:
     filename: /usr/local/rcfin/db/rcfin.db
@@ -15,7 +22,27 @@ jellyfin:
 collections:
   - name: Movies
     type: movies
-    directory: /media/movies
+    directory: movies:Films
+    vfs:
+      dir_cache_time: 30m
+      poll_interval: 0s
+      read_only: true
+      vfs_cache_mode: full
+      vfs_cache_max_size: 20GiB
+      vfs_cache_max_age: 24h
+      vfs_read_chunk_size: 32M
+      vfs_read_chunk_size_limit: 256M
+      vfs_handle_caching: 1m
   - name: TV Shows
     type: shows
-    directory: /media/tv-series
+    directory: tv:Series
+    vfs:
+      dir_cache_time: 30m
+      poll_interval: 0s
+      read_only: true
+      vfs_cache_mode: full
+      vfs_cache_max_size: 20GiB
+      vfs_cache_max_age: 24h
+      vfs_read_chunk_size: 32M
+      vfs_read_chunk_size_limit: 256M
+      vfs_handle_caching: 1m

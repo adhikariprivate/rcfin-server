@@ -2,12 +2,12 @@
 package metadata
 
 import (
+	"bytes"
 	"encoding/xml"
 	"fmt"
 	"io"
 	"log"
 	"math"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -16,17 +16,17 @@ import (
 type MetadataNfo struct {
 	// filename is the full path to the NFO file, e.g. "/mnt/media/casablanca.nfo"
 	filename string
+	data     []byte
 	// year is an optional override for the release year. Could be derived from the file name.
 	year int
 	// nfo is the parsed NFO data.
 	nfo *nfo
 }
 
-// NewNfo creates a new metadata handler for the given NFO filename.
-func NewNfo(filename string) *MetadataNfo {
-	return &MetadataNfo{
-		filename: filename,
-	}
+// NewNfoFromData creates a metadata reader from NFO bytes already read from
+// storage. This keeps remote sidecar access within the collection's VFS.
+func NewNfoFromData(filename string, data []byte) *MetadataNfo {
+	return &MetadataNfo{filename: filename, data: data}
 }
 
 // Duration returns the duration of the video.
@@ -212,13 +212,12 @@ func (n *MetadataNfo) loadNfo() {
 	if n.nfo != nil {
 		return
 	}
-	if file, err := os.Open(n.filename); err == nil {
-		defer file.Close()
-		n.nfo, err = NfoDecode(file)
+	if n.data != nil {
+		var err error
+		n.nfo, err = NfoDecode(bytes.NewReader(n.data))
 		if err != nil {
 			log.Printf("Error parsing NFO file %s: %v\n", n.filename, err)
 		}
-		// We ignore errors here, as we can work with partial data.
 	}
 
 	// We create empty structs to avoid nil pointer dereferences later.

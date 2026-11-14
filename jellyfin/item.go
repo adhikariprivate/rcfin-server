@@ -7,7 +7,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
-	"os"
+	"path"
 	"slices"
 	"sort"
 	"strconv"
@@ -17,6 +17,7 @@ import (
 	"github.com/gorilla/mux"
 
 	"github.com/adhikariprivate/rcfin-server/collection"
+	"github.com/adhikariprivate/rcfin-server/rclonestore"
 )
 
 // /Items/f137a2dd21bbc1b99aa5c0f6bf02a805
@@ -1131,11 +1132,11 @@ func (j *Jellyfin) videoStreamHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("content-type", mimeTypeByExtension(i.FileName()))
-	j.serveFile(w, r, c.Directory+"/"+i.Path()+"/"+i.FileName())
+	j.serveFile(w, r, c.Storage, path.Join(i.Path(), i.FileName()))
 }
 
-func (j *Jellyfin) serveFile(w http.ResponseWriter, r *http.Request, filename string) {
-	file, err := os.Open(filename)
+func (j *Jellyfin) serveFile(w http.ResponseWriter, r *http.Request, storage *rclonestore.Library, filename string) {
+	file, err := storage.OpenFile(filename)
 	if err != nil {
 		apierror(w, "File not found", http.StatusNotFound)
 		return

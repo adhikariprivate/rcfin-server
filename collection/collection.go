@@ -1,5 +1,7 @@
 package collection
 
+import "github.com/adhikariprivate/rcfin-server/rclonestore"
+
 type Collection struct {
 	// Unique identifier for the collection. Hash of the collection name, or taken from configfile.
 	ID string
@@ -9,11 +11,11 @@ type Collection struct {
 	Type CollectionType
 	// Items in the collection, could be type movies or shows
 	Items []Item
-	// Directory where the collection is stored
-	Directory string
-	// BaseUrl   string
-	// HLS server URL for streaming content
-	HlsServer string
+	// Remote is the rclone remote path serving this collection,
+	// for example "movies:Films".
+	Remote string
+	// Storage is the library-specific rclone filesystem and VFS.
+	Storage *rclonestore.Library
 }
 
 type CollectionType string
@@ -24,11 +26,3 @@ const (
 )
 
 type Collections []Collection
-
-func (c *Collection) GetHlsServer() string {
-	return c.HlsServer
-}
-
-func (c *Collection) GetDataDir() string {
-	return c.Directory
-}

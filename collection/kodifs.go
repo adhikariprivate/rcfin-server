@@ -3,6 +3,7 @@ package collection
 
 import (
 	"fmt"
+	"log"
 	"path"
 	"regexp"
 	"sort"
@@ -33,12 +34,16 @@ type epMapType struct {
 // between processing each movie directory, to avoid overloading the filesystem.
 // If pace is 0, no waiting is done.
 func (cr *CollectionRepo) buildMovies(coll *Collection, pace time.Duration) (items []Item) {
-	f, err := OpenDir(coll.Directory)
+	f, err := OpenDir(coll.Storage, "")
 	if err != nil {
 		return
 	}
 	defer f.Close()
-	fi, _ := f.Readdir(0)
+	fi, err := f.Readdir(0)
+	if err != nil {
+		log.Printf("Unable to list collection %q: %v", coll.Name, err)
+		return
+	}
 	if len(fi) == 0 {
 		return
 	}
@@ -63,13 +68,17 @@ func (cr *CollectionRepo) buildMovies(coll *Collection, pace time.Duration) (ite
 // buildMovie builds a movie item from a movie directory. It scans the directory
 // for video files and images, and returns an Item.
 func (cr *CollectionRepo) buildMovie(coll *Collection, dir string) (movie *Movie) {
-	d := path.Join(coll.Directory, dir)
-	f, err := OpenDir(d)
+	d := dir
+	f, err := OpenDir(coll.Storage, d)
 	if err != nil {
 		return
 	}
 	defer f.Close()
-	fi, _ := f.Readdir(0)
+	fi, err := f.Readdir(0)
+	if err != nil {
+		log.Printf("Unable to list movie directory %q in %q: %v", dir, coll.Name, err)
+		return
+	}
 	if len(fi) == 0 {
 		return
 	}
@@ -81,14 +90,10 @@ func (cr *CollectionRepo) buildMovie(coll *Collection, dir string) (movie *Movie
 	for _, f := range fi {
 		s := isVideo.FindStringSubmatch(f.Name())
 		if len(s) > 0 {
-			ts := f.Createtime()
-			if !ts.IsZero() {
-				video = s[0]
-				base = s[1]
-				filesize = f.Size()
-				created = ts
-
-			}
+			video = s[0]
+			base = s[1]
+			filesize = f.Size()
+			created = f.Createtime()
 		}
 	}
 	if video == "" {
@@ -111,7 +116,6 @@ func (cr *CollectionRepo) buildMovie(coll *Collection, dir string) (movie *Movie
 		id:       idhash.IdHash(mname),
 		name:     mname,
 		sortName: makeSortName(mname),
-		// BaseUrl:    coll.BaseUrl,
 		path:     dir,
 		fileName: video,
 		fileSize: filesize,
@@ -181,8 +185,10 @@ func (cr *CollectionRepo) buildMovie(coll *Collection, dir string) (movie *Movie
 		}
 
 		if ext == "nfo" {
-			movie.Metadata = metadata.NewNfo(path.Join(coll.Directory, dir, name))
-			movie.Metadata.SetYear(year)
+			if data, err := coll.Storage.ReadFile(path.Join(dir, name)); err == nil {
+				movie.Metadata = metadata.NewNfoFromData(path.Join(dir, name), data)
+				movie.Metadata.SetYear(year)
+			}
 			continue
 		}
 	}
@@ -210,12 +216,16 @@ func (cr *CollectionRepo) buildMovie(coll *Collection, dir string) (movie *Movie
 // between processing each movie directory, to avoid overloading the filesystem.
 // If pace is 0, no waiting is done.
 func (cr *CollectionRepo) buildShows(coll *Collection, pace time.Duration) (items []Item) {
-	f, err := OpenDir(coll.Directory)
+	f, err := OpenDir(coll.Storage, "")
 	if err != nil {
 		return
 	}
 	defer f.Close()
-	fi, _ := f.Readdir(0)
+	fi, err := f.Readdir(0)
+	if err != nil {
+		log.Printf("Unable to list show library %q: %v", coll.Name, err)
+		return
+	}
 	if len(fi) == 0 {
 		return
 	}
@@ -287,14 +297,18 @@ func epMatch(epMap map[string]epMapType, s []string) (ep *Episode, aux, ext stri
 
 // showScanDir scans a show directory for episodes and images. It updates the
 // show item with the found episodes and images.
-func (cr *CollectionRepo) showScanDir(showDir, baseDir, seasonDir string, seasonHint int, show *Show) {
+func (cr *CollectionRepo) showScanDir(coll *Collection, showDir, baseDir, seasonDir string, seasonHint int, show *Show) {
 	d := path.Join(baseDir, seasonDir)
-	f, err := OpenDir(d)
+	f, err := OpenDir(coll.Storage, d)
 	if err != nil {
 		return
 	}
 	defer f.Close()
-	fi, _ := f.Readdir(0)
+	fi, err := f.Readdir(0)
+	if err != nil {
+		log.Printf("Unable to list directory %q in show %q: %v", d, showDir, err)
+		return
+	}
 	if len(fi) == 0 {
 		return
 	}
@@ -312,13 +326,15 @@ func (cr *CollectionRepo) showScanDir(showDir, baseDir, seasonDir string, season
 			s := isShowSubdir.FindStringSubmatch(fn)
 			if len(s) > 0 {
 				sn := parseInt(s[1])
-				cr.showScanDir(showDir, d, fn, sn, show)
+				cr.showScanDir(coll, showDir, d, fn, sn, show)
 				continue
 			}
 
 			// nfo file.
 			if fn == "tvshow.nfo" {
-				show.Metadata = metadata.NewNfo(path.Join(d, fn))
+				if data, err := coll.Storage.ReadFile(path.Join(d, fn)); err == nil {
+					show.Metadata = metadata.NewNfoFromData(path.Join(d, fn), data)
+				}
 				continue
 			}
 
@@ -464,7 +480,9 @@ func (cr *CollectionRepo) showScanDir(showDir, baseDir, seasonDir string, season
 		}
 
 		if ext == "nfo" {
-			ep.Metadata = metadata.NewNfo(path.Join(baseDir, seasonDir, name))
+			if data, err := coll.Storage.ReadFile(path.Join(baseDir, seasonDir, name)); err == nil {
+				ep.Metadata = metadata.NewNfoFromData(path.Join(baseDir, seasonDir, name), data)
+			}
 			continue
 		}
 	}
@@ -478,11 +496,10 @@ func (cr *CollectionRepo) buildShow(coll *Collection, dir string) (show *Show) {
 		id:       idhash.IdHash(name),
 		name:     name,
 		sortName: makeSortName(name),
-		// BaseUrl: coll.BaseUrl,
 		path: dir,
 	}
-	d := path.Join(coll.Directory, dir)
-	cr.showScanDir(dir, d, "", -1, item)
+	d := dir
+	cr.showScanDir(coll, dir, d, "", -1, item)
 
 	for i := range item.Seasons {
 		s := &(item.Seasons[i])

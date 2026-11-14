@@ -18,8 +18,6 @@ type Item interface {
 	SortName() string
 	// Path returns the directory to the item, relative to collection root.
 	Path() string
-	// BaseUrl returns the base URL for accessing the item.
-	BaseUrl() string
 	// Banner returns the item's banner image, often "banner.jpg", TV shows only.
 	Banner() string
 	// Fanart returns this item's fanart image, often "fanart.jpg"
@@ -71,8 +69,6 @@ type Movie struct {
 	sortName string
 	// path is the directory to the movie, relative to collection root.
 	path string
-	// baseUrl is the base URL for accessing the movie.
-	baseUrl string
 	// created is the create timestamp of the movie.
 	created time.Time
 	// banner is the movie's banner image, often "banner.jpg", TV shows only.
@@ -106,7 +102,6 @@ func (m *Movie) Etag() string {
 func (m *Movie) Name() string              { return m.name }
 func (m *Movie) SortName() string          { return m.sortName }
 func (m *Movie) Path() string              { return m.path }
-func (m *Movie) BaseUrl() string           { return m.baseUrl }
 func (m *Movie) Created() time.Time        { return m.created }
 func (m *Movie) Banner() string            { return m.banner }
 func (m *Movie) Fanart() string            { return m.fanart }
@@ -114,7 +109,6 @@ func (m *Movie) Folder() string            { return m.folder }
 func (m *Movie) Poster() string            { return m.poster }
 func (m *Movie) Logo() string              { return "" }
 func (m *Movie) FileName() string          { return m.fileName }
-func (m *Movie) FilePath() string          { return m.path + "/" + m.fileName }
 func (m *Movie) FileSize() int64           { return m.fileSize }
 func (m *Movie) Duration() time.Duration   { return m.Metadata.Duration() }
 func (m *Movie) VideoCodec() string        { return m.Metadata.VideoCodec() }
@@ -147,8 +141,6 @@ type Show struct {
 	sortName string
 	// path is the directory to the show, relative to collection root. E.g. "Casablanca (1949)"
 	path string
-	// baseUrl is the base URL for accessing the m.
-	baseUrl string
 	// firstVideo is the timestamp of the first video in the show.
 	firstVideo time.Time
 	// lastVideo is the timestamp of the last video in the show.
@@ -192,7 +184,6 @@ func (s *Show) Etag() string {
 func (s *Show) Name() string            { return s.name }
 func (s *Show) SortName() string        { return s.sortName }
 func (s *Show) Path() string            { return s.path }
-func (s *Show) BaseUrl() string         { return s.baseUrl }
 func (s *Show) FirstVideo() time.Time   { return s.firstVideo }
 func (s *Show) LastVideo() time.Time    { return s.lastVideo }
 func (s *Show) Banner() string          { return s.banner }
@@ -267,7 +258,6 @@ func (season *Season) Etag() string {
 func (season *Season) Name() string     { return season.name }
 func (season *Season) SortName() string { return season.name }
 func (season *Season) Path() string     { return season.path }
-func (season *Season) BaseUrl() string  { return "" }
 func (season *Season) Number() int      { return season.seasonno }
 func (season *Season) Banner() string   { return season.banner }
 func (season *Season) Fanart() string   { return season.fanart }
@@ -370,7 +360,6 @@ func (e *Episode) Etag() string {
 func (e *Episode) Name() string              { return e.name }
 func (e *Episode) SortName() string          { return e.sortName }
 func (e *Episode) Path() string              { return e.path }
-func (e *Episode) BaseUrl() string           { return "" }
 func (e *Episode) Created() time.Time        { return e.created }
 func (e *Episode) Banner() string            { return "" }
 func (e *Episode) Fanart() string            { return "" }

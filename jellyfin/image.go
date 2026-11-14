@@ -17,6 +17,7 @@ import (
 
 	"github.com/adhikariprivate/rcfin-server/database/model"
 	"github.com/adhikariprivate/rcfin-server/idhash"
+	"github.com/adhikariprivate/rcfin-server/rclonestore"
 )
 
 const (
@@ -86,7 +87,7 @@ func (j *Jellyfin) itemsImagesGetHandler(w http.ResponseWriter, r *http.Request)
 	switch strings.ToLower(imageType) {
 	case "primary":
 		if i.Poster() != "" {
-			j.serveImageFile(w, r, c.Directory+"/"+i.Path()+"/"+i.Poster(), j.imageQualityPoster)
+			j.serveImageFile(w, r, c.Storage, path.Join(i.Path(), i.Poster()), j.imageQualityPoster)
 			return
 		}
 		// todo implement fallback options:
@@ -96,14 +97,14 @@ func (j *Jellyfin) itemsImagesGetHandler(w http.ResponseWriter, r *http.Request)
 		return
 	case "backdrop":
 		if i.Fanart() != "" {
-			j.serveFile(w, r, c.Directory+"/"+i.Path()+"/"+i.Fanart())
+			j.serveFile(w, r, c.Storage, path.Join(i.Path(), i.Fanart()))
 			return
 		}
 		apierror(w, "Backdrop not found", http.StatusNotFound)
 		return
 	case "logo":
 		if i.Logo() != "" {
-			j.serveImageFile(w, r, c.Directory+"/"+i.Path()+"/"+i.Logo(), j.imageQualityPoster)
+			j.serveImageFile(w, r, c.Storage, path.Join(i.Path(), i.Logo()), j.imageQualityPoster)
 			return
 		}
 		apierror(w, "Logo not found", http.StatusNotFound)
@@ -383,8 +384,9 @@ func (j *Jellyfin) serveItemImage(w http.ResponseWriter, r *http.Request, itemID
 }
 
 // serveImageFile serves an image file from the filesystem
-func (j *Jellyfin) serveImageFile(w http.ResponseWriter, r *http.Request, filename string, imageQuality int) {
-	file, err := j.imageresizer.OpenFile(w, r, filename, imageQuality)
+func (j *Jellyfin) serveImageFile(w http.ResponseWriter, r *http.Request, storage *rclonestore.Library, filename string, imageQuality int) {
+	cacheKey := strings.TrimSuffix(storage.Remote(), "/") + "/" + filename
+	file, err := j.imageresizer.OpenFile(w, r, filename, imageQuality, cacheKey, storage.OpenFile)
 	if file == nil && err == nil {
 		log.Printf("Could not open image file: %s\n", filename)
 		apierror(w, "File not found", http.StatusNotFound)

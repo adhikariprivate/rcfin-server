@@ -160,13 +160,15 @@ func (j *Jellyfin) usersGroupingOptionsHandler(w http.ResponseWriter, r *http.Re
 
 // POST /Library/Refresh
 //
-// libraryRefreshHandler triggers a library refresh
+// libraryRefreshHandler triggers an immediate library rescan.
 func (j *Jellyfin) libraryRefreshHandler(w http.ResponseWriter, r *http.Request) {
 	reqCtx := j.getRequestCtx(w, r)
 	if reqCtx == nil {
 		return
 	}
-	// we just return 204 as we do not support this
+	// Scanning can take a while on large remotes, so run it in the
+	// background and acknowledge the request immediately.
+	go j.collections.Refresh(context.Background())
 	w.WriteHeader(http.StatusNoContent)
 }
 
