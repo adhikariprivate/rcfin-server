@@ -1,6 +1,0 @@
-{"type":"goal_created","goalId":"mwfy3vkq-guons6","objective":"Automate multi-platform prebuilt binary releases on version tags and publish v1.0.0 with verified artifacts.","sisyphus":false,"autoContinue":true,"at":"2026-11-14T05:08:45.338Z"}
-{"type":"task_list_set","goalId":"mwfy3vkq-guons6","taskCount":4,"blockCompletion":true,"at":"2026-11-14T05:08:45.338Z"}
-{"type":"task_started","goalId":"mwfy3vkq-guons6","taskId":"task-1","at":"2026-11-14T05:08:59.942Z"}
-{"type":"task_complete","goalId":"mwfy3vkq-guons6","taskId":"task-1","evidence":"goreleaser check passes; matrix covers linux/windows/freebsd/openbsd/netbsd/dragonfly 386/amd64/arm/arm64; version ldflags + --version flag verified (rcfin dev build prints version)","at":"2026-11-14T05:11:35.255Z"}
-{"type":"task_started","goalId":"mwfy3vkq-guons6","taskId":"task-2","at":"2026-11-14T05:11:39.968Z"}
-{"type":"goal_paused","goalId":"mwfy3vkq-guons6","reason":"Previous autonomous execution was interrupted. Use /goal-resume; its dispatch will not be replayed.","source":"agent","at":"2026-11-14T05:14:35.809Z"}

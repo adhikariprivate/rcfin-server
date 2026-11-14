@@ -28,3 +28,6 @@ rcfin*.yaml
 !rcfin.example.yaml
 screenlog.*
 *.db
+
+# Local Codex/agent state
+.pi/
