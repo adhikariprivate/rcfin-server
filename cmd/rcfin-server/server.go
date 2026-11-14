@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -23,6 +24,13 @@ import (
 	"github.com/adhikariprivate/rcfin-server/internal/jellyfin"
 	"github.com/adhikariprivate/rcfin-server/internal/muxnormalizer"
 	"github.com/adhikariprivate/rcfin-server/internal/rclonestore"
+)
+
+// Set via ldflags by GoReleaser (see .goreleaser.yaml).
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
 )
 
 type configFile struct {
@@ -68,8 +76,14 @@ func main() {
 	viper.SetDefault("logfile", "/dev/stdout")
 
 	pflag.String("config", "rcfin.yaml", "Path to configuration file.")
+	pflag.Bool("version", false, "Print version information and exit.")
 	viper.BindPFlag(configFileNameKey, pflag.Lookup("config"))
 	pflag.Parse()
+
+	if showVersion, _ := pflag.CommandLine.GetBool("version"); showVersion {
+		fmt.Printf("rcfin %s (commit %s, built %s)\n", version, commit, date)
+		os.Exit(0)
+	}
 
 	// Read config file
 	cf := viper.GetString(configFileNameKey)

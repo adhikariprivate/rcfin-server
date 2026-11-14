@@ -40,7 +40,7 @@ func IdHash(name string) string {
 		} else if m < 62 {
 			c = m + 97 - 36
 		}
-		id += string(c)
+		id += string(rune(c))
 	}
 
 	return id

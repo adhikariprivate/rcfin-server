@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 
 	"github.com/adhikariprivate/rcfin-server/internal/database/model"
 )
@@ -41,13 +41,13 @@ func New(o *ConfigFile) (*SqliteRepo, error) {
 		return nil, fmt.Errorf("database filename not set")
 	}
 
-	dbHandle, err := sqlx.Connect("sqlite3", o.Filename)
+	dbHandle, err := sqlx.Connect("sqlite", o.Filename)
 	if err != nil {
 		return nil, err
 	}
 	dbHandle.SetMaxOpenConns(max(4, runtime.NumCPU()))
 
-	writeDB, err := sqlx.Connect("sqlite3", o.Filename)
+	writeDB, err := sqlx.Connect("sqlite", o.Filename)
 	if err != nil {
 		return nil, err
 	}

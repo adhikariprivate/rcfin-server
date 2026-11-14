@@ -78,3 +78,5 @@ Nested movie grouping directories and mixed movie/show layouts in one collection
 ## Development and contributions
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, development commands, and contribution guidelines. RCFin is licensed under the MIT License; see [LICENSE](LICENSE).
+
+See [docs/releases.md](docs/releases.md) for supported binary targets and the automated release process.
