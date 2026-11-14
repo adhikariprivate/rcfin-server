@@ -48,6 +48,12 @@ Edit `rcfin.yaml` before starting the server. Set the SQLite filename and global
 
 See [`rcfin.example.yaml`](rcfin.example.yaml) for a complete example and [`docs/configuration.md`](docs/configuration.md) for field definitions.
 
+## User accounts and sign-in
+
+RCFin stores accounts in its local SQLite database; there is no separate sign-up page or preconfigured default account. With `jellyfin.auto_register: true` (also accepted as the legacy `jellyfin.autoregister` spelling), enter a username and password in a compatible client's manual sign-in form. The first authentication creates that account; later clients use the same credentials. Fladder's username/password login works. Quick Connect is disabled unless `jellyfin.quick_connect` is enabled.
+
+Auto-registration creates a regular, hidden user, not an administrator. RCFin does not yet provide a first-run administrator setup flow. While auto-registration is enabled, anyone who can reach the server can create an account, so restrict access with `listen.ip_acl` or your network/firewall, or disable auto-registration after creating the users you need. With it disabled, unknown usernames receive an unauthorized response; they are not registered.
+
 ## Library layout
 
 Movie libraries have one directory per movie, containing the video and optional NFO and artwork files:

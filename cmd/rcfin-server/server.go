@@ -67,6 +67,20 @@ type configFile struct {
 	}
 }
 
+func applyLegacyJellyfinConfig(v *viper.Viper, config *configFile) {
+	// Keep accepting the original compact key spellings used by pre-1.0.1
+	// configs while documenting the underscore-separated names going forward.
+	if !v.IsSet("jellyfin.auto_register") && v.IsSet("jellyfin.autoregister") {
+		config.Jellyfin.AutoRegister = v.GetBool("jellyfin.autoregister")
+	}
+	if !v.IsSet("jellyfin.server_name") && v.IsSet("jellyfin.servername") {
+		config.Jellyfin.ServerName = v.GetString("jellyfin.servername")
+	}
+	if !v.IsSet("jellyfin.image_quality_poster") && v.IsSet("jellyfin.imagequalityposter") {
+		config.Jellyfin.ImageQualityPoster = v.GetInt("jellyfin.imagequalityposter")
+	}
+}
+
 func main() {
 	const configFileNameKey = "config"
 
@@ -96,6 +110,7 @@ func main() {
 	if err := viper.Unmarshal(&config); err != nil {
 		log.Fatalf("Unable to decode config into struct: %v", err)
 	}
+	applyLegacyJellyfinConfig(viper.GetViper(), &config)
 
 	// Set up logging
 	logfile := viper.GetString("logfile")

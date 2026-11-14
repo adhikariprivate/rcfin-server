@@ -64,16 +64,24 @@ func (j *Jellyfin) usersAuthenticateByNameHandler(w http.ResponseWriter, r *http
 
 	// Get user from database
 	user, err := j.repo.GetUser(r.Context(), request.Username)
-	if err == nil {
+	if err == nil && user != nil {
 		// User found, verify password
 		if err = validatePassword(user.Password, request.Pw); err != nil {
 			apierror(w, "Invalid username/password", http.StatusUnauthorized)
 			return
 		}
+	} else if err != nil && !errors.Is(err, model.ErrNotFound) {
+		log.Printf("Failed to look up user %q: %v", request.Username, err)
+		apierror(w, "Failed to look up user", http.StatusInternalServerError)
+		return
 	}
 
 	// Try to auto-register user if not found and auto-register is enabled
-	if user == nil && j.autoRegister {
+	if user == nil {
+		if !j.autoRegister {
+			apierror(w, "Invalid username/password", http.StatusUnauthorized)
+			return
+		}
 		user, err = j.createUser(r.Context(), request.Username, request.Pw)
 		if err != nil || user == nil {
 			apierror(w, "Failed to auto-register user", http.StatusInternalServerError)

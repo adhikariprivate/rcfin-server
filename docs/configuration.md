@@ -70,6 +70,8 @@ Use the normal Rclone tooling to create and verify remote sections. RCFin embeds
 
 The SQLite database, artwork cache, and Rclone VFS cache are local data. The media itself is accessed through Rclone. The selected VFS cache mode and limits determine how much local disk can be used for media reads.
 
+For compatibility, existing configs may continue using the compact Jellyfin keys `servername`, `autoregister`, and `imagequalityposter`. New configs should use `server_name`, `auto_register`, and `image_quality_poster` as shown in the example.
+
 ## Troubleshooting
 
 - `rclone remote path is required`: a collection is missing `remote` or has an empty value. `directory` is not the supported YAML key.
