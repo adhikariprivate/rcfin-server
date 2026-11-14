@@ -23,7 +23,6 @@ import (
 	"github.com/erikbos/jellofin-server/imageresize"
 	"github.com/erikbos/jellofin-server/jellyfin"
 	"github.com/erikbos/jellofin-server/muxnormalizer"
-	"github.com/erikbos/jellofin-server/notflix"
 )
 
 type configFile struct {
@@ -34,7 +33,6 @@ type configFile struct {
 		TlsKey  string
 		IPACL   string
 	}
-	Appdir   string
 	Cachedir string
 	Dbdir    string
 	Database struct {
@@ -143,14 +141,6 @@ func main() {
 
 	r := mux.NewRouter()
 
-	n := notflix.New(&notflix.Options{
-		Collections:  collection,
-		Repo:         repo,
-		Imageresizer: resizer,
-		Appdir:       config.Appdir,
-	})
-	n.RegisterHandlers(r)
-
 	j := jellyfin.New(&jellyfin.Options{
 		Collections:        collection,
 		Repo:               repo,
@@ -168,8 +158,6 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("User-agent: *\nDisallow: /\n"))
 	})
-
-	r.PathPrefix("/").Handler(http.FileServer(http.Dir(config.Appdir)))
 
 	collection.Init()
 	go collection.Background(context.Background())

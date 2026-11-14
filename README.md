@@ -1,9 +1,6 @@
 # Jellofin Server
 
-This is the Jellofin Media Server server. It support serving contents to clients using two different server APIs:
-
-1. Jellyfin API
-2. Notflix API
+This is the Jellofin Media Server. It serves media libraries through the Jellyfin API.
 
 ## Jellyfin API
 
@@ -20,14 +17,6 @@ The following clients can connect to Jellofin:
 | [Streamyfin](https://streamyfin.app/)            | ✅      | Full player functionality |
 | [VidHub](https://okaapps.com/product/1659622164) | ✅      | Full player functionality |
 
-## Notflix API
-
-- HTTP server for data (movies, images, etc) at `/data/<source-id>/path/...`
-- Supports on the fly image resizing (?w=num&h=num&q=num) with a local image cache.
-- JSON/REST API server at /api/
-  - libraries (movies, tvshows, ...)
-  - user data (auth, favorites, seen, ...)
-
 ## Installation
 
 1. run `go build` to compile `jellofin-server`
@@ -43,7 +32,6 @@ The server uses a YAML configuration file (default: `jellofin-server.yaml`). Bel
 | Key           | Type    | Description                                                                 |
 |---------------|---------|-----------------------------------------------------------------------------|
 | `listen`      | object  | Network settings for the server.                                            |
-| `appdir`      | string  | Path to the directory containing the web UI/static files.                   |
 | `cachedir`    | string  | Path to the directory for image cache storage.                              |
 | `dbdir`       | string  | Legacy: directory where a DB file may be stored (kept for backwards compat).|
 | `database`    | object  | Database backend configuration.                                             |
@@ -85,8 +73,7 @@ Each entry defines a media collection:
 | `id`        | string | Optional override for collection ID (expert use!).              |
 | `name`      | string | Display name of the collection.                                 |
 | `type`      | string | Type of collection: `movies`, `shows`.                          |
-| `directory` | string | Filesystem path to the media files.                             |
-| `baseurl`   | string | Base URL for accessing the collection (optional).               |
+| `directory` | string | Path to the media files. |
 | `hlsserver` | string | URL of the HLS server for streaming (optional).                 |
 
 ---
@@ -110,7 +97,6 @@ listen:
   address: 0.0.0.0
   port: 8096
 
-appdir: /srv/jellofin/ui
 cachedir: /srv/jellofin/cache
 logfile: stdout
 
@@ -123,13 +109,11 @@ collections:
     name: Movies
     type: movies
     directory: /srv/media/movies
-    baseurl: /media/movies
     hlsserver: http://localhost:6453/media/movies/
   - id: shows
     name: TV Shows
     type: shows
     directory: /srv/media/shows
-    baseurl: /media/shows
     hlsserver: http://localhost:6453/media/shows/
 
 jellyfin:
@@ -201,15 +185,8 @@ movies/
 
 ### Data
 
-The source of a collection will usually be one directory on the filesystem
-of the server. A collection can have multiple sources though, so it can have
-more than one directory, or even remote locations.
-
-Each source of a collection is mapped to `/data/:source`. That's why the
-baseuri is included in each item, since there can be multiple baseuris
-in one collection.
+Collections are indexed from their configured storage roots and served through Jellyfin item and video endpoints.
 
 ## Acknowledgements
 
-- [https://github.com/miquels/notflix-server](https://github.com/miquels/notflix-server) for original code this project is based upon.
 - [https://jellyfin.org](jellyfin.org) for an awesome Mediaserver initiative.
