@@ -1,52 +1,81 @@
 # Configuration
 
-RCFin reads one YAML configuration file, `rcfin.yaml` by default. See [`rcfin.example.yaml`](../rcfin.example.yaml) for a working template.
+RCFin reads YAML from `rcfin.yaml` in the current working directory by default. Select another file with `--config /path/to/file.yaml`. Start from the complete [example configuration](../rcfin.example.yaml), then replace its paths and Rclone remote paths with values for your host.
 
-## Global Rclone settings
+## Complete example
+
+The example file is the canonical full configuration. It includes optional listen/TLS/access-control fields, logging, local database and cache paths, global Rclone settings, Jellyfin settings, two library definitions, and per-library VFS tuning.
+
+```sh
+cp rcfin.example.yaml rcfin.yaml
+${EDITOR:-vi} rcfin.yaml
+./rcfin --config rcfin.yaml
+```
+
+Create the parent directories for the SQLite database and local caches before startup, and ensure the RCFin process user can write to them. For example:
+
+```sh
+install -d -o rcfin -g rcfin /var/lib/rcfin /var/cache/rcfin/images /var/cache/rcfin/rclone
+```
+
+## Rclone config path and library remote
+
+`rclone.config` is the path to the Rclone INI **file**, including its filename. It is not the directory containing the file. For example, if the file on disk is `/home/rcfin/apps/rcfin/rclone.config`, use:
 
 ```yaml
 rclone:
-  config: /etc/rcfin/rclone.conf
-  cache_dir: /var/cache/rcfin/rclone
+  config: /home/rcfin/apps/rcfin/rclone.config
+  cache_dir: /home/rcfin/apps/rcfin/vfs
 ```
 
-`rclone.config` is the path to the normal Rclone INI config file. If omitted, Rclone uses its standard config path. Store backend credentials and provider settings in that file; do not duplicate credentials in each library block. `rclone.cache_dir` selects the local root used by Rclone's VFS file cache. If omitted, Rclone's own default cache directory is used.
+If `rclone.config` is omitted or empty, the embedded Rclone SDK uses its normal default configuration behavior. The configured file must be readable by the RCFin process and contain a section for each named remote referenced by a library. Keep credentials private and do not paste them into issue reports.
 
-Rclone config is shared by the process. Each library's `directory` chooses a remote and root within that global config, while that library's `vfs` block controls a separate VFS instance.
+Each collection uses the key `remote`, with a value such as `files:HTPC/Movies`. The part before the colon (`files`) must exactly match a section name such as `[files]` in the Rclone config file. The part after the colon is the path within that remote. A remote can be reused by multiple collections, and different collections can select different remotes. Rclone config and credentials are global; VFS options are per collection.
 
-## Libraries
-
-Each `collections` entry has:
-
-| Key | Meaning |
-| --- | --- |
-| `id` | Optional stable library ID. |
-| `name` | Display name. |
-| `type` | `movies` or `shows`. |
-| `directory` | Rclone path, such as `films:Movies` or `archive:TV/Series`. |
-| `vfs` | Per-library Rclone VFS settings. See the [full reference](vfs-options.md). |
-| `hlsserver` | Optional external HLS URL retained for existing deployments. |
-
-A library may target a different configured Rclone remote from every other library. It may also use a different folder under the same remote. Configure a backend once in the global Rclone INI file, then refer to it by remote name in `directory`.
-
-## Local application data
-
-`database.sqlite.filename` is a local SQLite file. `cachedir` is a separate local cache for resized artwork. Rclone's `cache_dir` is only for Rclone VFS file caching. Keep these on local storage with enough free space for the policies selected in each library's VFS options.
-
-`rescan_interval` controls the periodic collection/index refresh. It accepts Go duration syntax, defaults to `30m`, and must be positive. VFS directory entries are cached separately by `dir_cache_time`.
-
-## Example Rclone config
-
-The global file follows normal Rclone syntax. The following illustrates distinct remotes; use each backend's own setup process to create real credentials and options:
+Example Rclone INI structure (provider options and credentials vary by backend):
 
 ```ini
-[films]
-type = drive
-# backend-specific credentials and options are created by rclone config
-
-[tv]
-type = s3
-# backend-specific credentials and options are created by rclone config
+[files]
+type = crypt
+remote = upstream:/path/to/encrypted/data
+# Add the provider-specific and crypt options created for your setup.
 ```
 
-The snippets are illustrative only; actual provider options vary by backend. Keep the file private because it can contain tokens and secrets.
+Use the normal Rclone tooling to create and verify remote sections. RCFin embeds Rclone and does not need a separate Rclone executable or FUSE mount at runtime.
+
+## Configuration fields
+
+| YAML key | Meaning |
+| --- | --- |
+| `listen.address` | Optional bind address. Empty uses the server's default interface. |
+| `listen.port` | HTTP port; defaults to `8096`. |
+| `listen.tls_cert`, `listen.tls_key` | Set both paths to enable TLS. |
+| `listen.ip_acl` | Optional comma-separated client IP allow list; empty allows all clients. |
+| `logfile` | `stdout` (default), `stderr`, `none`, or a writable log file path. |
+| `cachedir` | Local artwork resize cache directory. |
+| `rescan_interval` | Positive Go duration for periodic library rescans; default `30m`. |
+| `database.sqlite.filename` | Local SQLite database file path. |
+| `rclone.config` | Optional full path to the Rclone INI config file. |
+| `rclone.cache_dir` | Local root directory for VFS cache data. |
+| `jellyfin.server_id` | Optional stable server ID. Leave empty to let RCFin generate one. |
+| `jellyfin.server_name` | Display name; defaults to `RCFin`. |
+| `jellyfin.auto_register` | Whether RCFin automatically registers users. |
+| `jellyfin.quick_connect` | Whether Quick Connect is enabled. |
+| `jellyfin.image_quality_poster` | Poster image quality setting. |
+| `collections[].id` | Optional stable collection ID. |
+| `collections[].name` | Collection display name. |
+| `collections[].type` | `movies` or `shows`. |
+| `collections[].remote` | Rclone remote path, e.g. `files:HTPC/Movies`. This key is named `remote`, not `directory`. |
+| `collections[].vfs` | Per-collection Rclone VFS options. See the [VFS reference](vfs-options.md). |
+
+The SQLite database, artwork cache, and Rclone VFS cache are local data. The media itself is accessed through Rclone. The selected VFS cache mode and limits determine how much local disk can be used for media reads.
+
+## Troubleshooting
+
+- `rclone remote path is required`: a collection is missing `remote` or has an empty value. `directory` is not the supported YAML key.
+- `didn't find section in config file ("files")`: verify `rclone.config` points to the actual readable INI file, including its filename, and that the file has a `[files]` section. A directory path or a differently named file will not load it.
+- RCFin `v1.0.0` did not install Rclone's file-backed config loader, so custom config files were ignored even with the correct path. Upgrade to a build containing the embedded config loader fix.
+- `remote not found in config`: check that the remote name before `:` matches the INI section name exactly.
+- Log file cannot be opened: select `stdout` or `stderr`, or ensure the RCFin user can create/append the configured file.
+- Library changes appear late: reduce `rescan_interval` and/or `dir_cache_time`; enable `poll_interval` only when the backend supports polling.
+- Seeks are slow: check backend range-read support and tune the collection's read-chunk and cache settings.

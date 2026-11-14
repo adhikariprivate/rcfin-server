@@ -6,7 +6,7 @@ Place VFS options inside each collection's `vfs` map. Keys use Rclone config nam
 collections:
   - name: Films
     type: movies
-    directory: drive:Films
+    remote: drive:Films
     vfs:
       dir_cache_time: 45m
       vfs_cache_mode: full

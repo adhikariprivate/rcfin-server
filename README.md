@@ -33,7 +33,7 @@ cp rcfin.example.yaml rcfin.yaml
 ./bin/rcfin --config rcfin.yaml
 ```
 
-Edit `rcfin.yaml` before starting the server. Set the SQLite filename and global Rclone config/cache paths. Set each collection directory to a configured `remote:path`. SQLite and VFS caches remain local. The default HTTP port is `8096`.
+Edit `rcfin.yaml` before starting the server. Set the SQLite filename and global Rclone config/cache paths. `rclone.config` must name the actual Rclone INI file, including its filename. Set each collection's `remote` to a configured `remote:path` such as `files:HTPC/Movies`. SQLite and caches remain local. The default HTTP port is `8096`.
 
 ## Configuration
 
@@ -42,9 +42,9 @@ Edit `rcfin.yaml` before starting the server. Set the SQLite filename and global
 - `cachedir`: local image cache path.
 - `rclone`: global config-file path and local VFS cache root.
 - `rescan_interval`: application library refresh interval (default `30m`).
-- `collections`: library ID, display name, type (`movies` or `shows`), Rclone remote path, and per-library `vfs` options. The expected Kodi-style folder layouts are described below.
+- `collections`: optional library ID, display name, type (`movies` or `shows`), `remote` Rclone path, and per-library `vfs` options. The expected Kodi-style folder layouts are described below.
 - `jellyfin`: server name and supported user / Quick Connect settings.
-- `logfile`: log destination; use `stdout` or `none` as needed.
+- `logfile`: log destination; use `stdout` (default), `stderr`, `none`, or a writable file path.
 
 See [`rcfin.example.yaml`](rcfin.example.yaml) for a complete example and [`docs/configuration.md`](docs/configuration.md) for field definitions.
 

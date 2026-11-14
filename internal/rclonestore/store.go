@@ -27,6 +27,7 @@ import (
 	_ "github.com/rclone/rclone/backend/all"
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config"
+	"github.com/rclone/rclone/fs/config/configfile"
 	"github.com/rclone/rclone/vfs"
 	"github.com/rclone/rclone/vfs/vfscommon"
 )
@@ -38,6 +39,10 @@ import (
 // enough for plain local paths and for remotes fully described by
 // RCLONE_CONFIG_* environment variables.
 func Configure(configFile, cacheDir string) error {
+	// The Rclone CLI installs this file-backed storage implementation from its
+	// own command package. Embedded consumers must install it explicitly or
+	// config.SetConfigPath has no effect and remotes remain memory-only.
+	configfile.Install()
 	if configFile != "" {
 		if err := config.SetConfigPath(configFile); err != nil {
 			return fmt.Errorf("set rclone config path: %w", err)

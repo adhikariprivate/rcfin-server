@@ -35,13 +35,13 @@ var (
 
 type configFile struct {
 	Listen struct {
-		Address string
-		Port    string
-		TlsCert string
-		TlsKey  string
-		IPACL   string
+		Address string `mapstructure:"address"`
+		Port    string `mapstructure:"port"`
+		TlsCert string `mapstructure:"tls_cert"`
+		TlsKey  string `mapstructure:"tls_key"`
+		IPACL   string `mapstructure:"ip_acl"`
 	}
-	Cachedir string
+	Cachedir string `mapstructure:"cachedir"`
 	Database struct {
 		Sqlite sqlite.ConfigFile `yaml:"sqlite"`
 	} `yaml:"database"`
@@ -52,18 +52,18 @@ type configFile struct {
 		CacheDir string `mapstructure:"cache_dir"`
 	} `mapstructure:"rclone"`
 	Collections []struct {
-		ID     string
-		Name   string
-		Type   string
-		Remote string
+		ID     string         `mapstructure:"id"`
+		Name   string         `mapstructure:"name"`
+		Type   string         `mapstructure:"type"`
+		Remote string         `mapstructure:"remote"`
 		VFS    map[string]any `mapstructure:"vfs"`
 	}
 	Jellyfin struct {
-		ServerID           string
-		ServerName         string
-		AutoRegister       bool
-		QuickConnect       bool
-		ImageQualityPoster int
+		ServerID           string `mapstructure:"server_id"`
+		ServerName         string `mapstructure:"server_name"`
+		AutoRegister       bool   `mapstructure:"auto_register"`
+		QuickConnect       bool   `mapstructure:"quick_connect"`
+		ImageQualityPoster int    `mapstructure:"image_quality_poster"`
 	}
 }
 
@@ -73,7 +73,7 @@ func main() {
 	// Set up viper for config file and command line flags
 	viper.SetConfigType("yaml")
 	viper.SetDefault("listen.port", "8096")
-	viper.SetDefault("logfile", "/dev/stdout")
+	viper.SetDefault("logfile", "stdout")
 
 	pflag.String("config", "rcfin.yaml", "Path to configuration file.")
 	pflag.Bool("version", false, "Print version information and exit.")
@@ -101,6 +101,10 @@ func main() {
 	logfile := viper.GetString("logfile")
 	log.Printf("Setting logfile to %s", logfile)
 	switch logfile {
+	case "stdout":
+		log.SetOutput(os.Stdout)
+	case "stderr":
+		log.SetOutput(os.Stderr)
 	case "none":
 		log.SetOutput(io.Discard)
 	default:

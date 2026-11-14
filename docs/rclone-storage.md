@@ -4,7 +4,7 @@ RCFin embeds Rclone v1.76.0 and imports Rclone's `backend/all` registry. The res
 
 ## One remote per library
 
-Use an ordinary Rclone remote path as the library `directory`:
+Use an ordinary Rclone remote path as the library `remote`:
 
 ```yaml
 rclone:
@@ -15,7 +15,7 @@ collections:
   - id: films
     name: Films
     type: movies
-    directory: drive:Media/Films
+    remote: drive:Media/Films
     vfs:
       dir_cache_time: 30m
       vfs_cache_mode: full
@@ -24,7 +24,7 @@ collections:
   - id: series
     name: Series
     type: shows
-    directory: s3archive:video/Series
+    remote: s3archive:video/Series
     vfs:
       dir_cache_time: 1h
       vfs_cache_mode: full
@@ -34,7 +34,7 @@ collections:
 
 Each library creates its own `fs.Fs` and VFS rooted at the configured remote path. VFS settings are isolated by library, so a slow object store can use a different directory cache, read chunk size, or local cache policy from a low-latency drive remote. The global config still owns the remote definitions and authentication.
 
-Use `remote:path` syntax even for the Rclone local backend, for example `local:/srv/media/Films`. Relative paths passed to Rclone's local backend also work when supported by Rclone.
+The part before `:` must match a section in the Rclone config file. Use `remote:path` syntax even for the Rclone local backend, for example `local:/srv/media/Films`. Relative paths passed to Rclone's local backend also work when supported by Rclone. The YAML key is `remote`; `directory` is not recognized.
 
 ## How clients access media
 
@@ -67,7 +67,8 @@ RCFin serves original files. It does not transcode, remux, or create HLS output.
 
 ## Troubleshooting
 
-- `remote not found in config`: check that `rclone.config` points to the intended INI file and that the section name before `:` matches exactly.
+- `didn't find section in config file`: check that `rclone.config` points to the actual INI file including its filename, then verify the file contains a section matching the part before `:` in the collection's `remote` value.
+- `remote not found in config`: verify that the section name before `:` matches exactly.
 - Backend credentials or token refresh failures: repair/refresh credentials with normal Rclone tools, then restart RCFin so it constructs fresh remotes.
 - Library changes appear late: lower `rescan_interval` and/or `dir_cache_time`; enable `poll_interval` only if the backend supports it.
 - Seeks are slow: check the backend's range-read support, then tune `vfs_read_chunk_size`, `vfs_read_chunk_size_limit`, and `vfs_cache_mode` for that library.
