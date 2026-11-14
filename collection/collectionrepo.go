@@ -8,9 +8,9 @@ import (
 	"log"
 	"time"
 
-	"github.com/erikbos/jellofin-server/collection/search"
-	"github.com/erikbos/jellofin-server/database"
-	"github.com/erikbos/jellofin-server/idhash"
+	"github.com/adhikariprivate/rcfin-server/collection/search"
+	"github.com/adhikariprivate/rcfin-server/database"
+	"github.com/adhikariprivate/rcfin-server/idhash"
 )
 
 // CollectionRepo is a repository holding content collections.

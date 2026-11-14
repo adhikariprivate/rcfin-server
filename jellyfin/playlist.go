@@ -13,8 +13,8 @@ import (
 
 	"github.com/gorilla/mux"
 
-	"github.com/erikbos/jellofin-server/database/model"
-	"github.com/erikbos/jellofin-server/idhash"
+	"github.com/adhikariprivate/rcfin-server/database/model"
+	"github.com/adhikariprivate/rcfin-server/idhash"
 )
 
 // POST /Playlists?ids=rVFG3EzPthk2wowNkqUl&name=MMM&userId=XAOVn7iqiBujnIQY8sd0

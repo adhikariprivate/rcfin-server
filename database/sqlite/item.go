@@ -8,8 +8,8 @@ import (
 	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
 
-	"github.com/erikbos/jellofin-server/database/model"
-	"github.com/erikbos/jellofin-server/idhash"
+	"github.com/adhikariprivate/rcfin-server/database/model"
+	"github.com/adhikariprivate/rcfin-server/idhash"
 )
 
 func (i *SqliteRepo) dbInsertItem(tx *sqlx.Tx, item *model.Item) error {

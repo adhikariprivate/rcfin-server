@@ -5,8 +5,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/erikbos/jellofin-server/collection/metadata"
-	"github.com/erikbos/jellofin-server/idhash"
+	"github.com/adhikariprivate/rcfin-server/collection/metadata"
+	"github.com/adhikariprivate/rcfin-server/idhash"
 )
 
 type Item interface {

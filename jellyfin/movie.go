@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/erikbos/jellofin-server/collection"
+	"github.com/adhikariprivate/rcfin-server/collection"
 )
 
 // /Movies/Recommendations

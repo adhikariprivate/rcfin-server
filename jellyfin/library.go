@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/erikbos/jellofin-server/collection"
-	"github.com/erikbos/jellofin-server/idhash"
+	"github.com/adhikariprivate/rcfin-server/collection"
+	"github.com/adhikariprivate/rcfin-server/idhash"
 )
 
 // /Library/VirtualFolders

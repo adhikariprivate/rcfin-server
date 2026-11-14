@@ -10,7 +10,7 @@ import (
 
 	"github.com/gorilla/mux"
 
-	"github.com/erikbos/jellofin-server/database/model"
+	"github.com/adhikariprivate/rcfin-server/database/model"
 )
 
 const (

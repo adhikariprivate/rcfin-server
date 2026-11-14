@@ -17,12 +17,12 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 
-	"github.com/erikbos/jellofin-server/collection"
-	"github.com/erikbos/jellofin-server/database"
-	"github.com/erikbos/jellofin-server/database/sqlite"
-	"github.com/erikbos/jellofin-server/imageresize"
-	"github.com/erikbos/jellofin-server/jellyfin"
-	"github.com/erikbos/jellofin-server/muxnormalizer"
+	"github.com/adhikariprivate/rcfin-server/collection"
+	"github.com/adhikariprivate/rcfin-server/database"
+	"github.com/adhikariprivate/rcfin-server/database/sqlite"
+	"github.com/adhikariprivate/rcfin-server/imageresize"
+	"github.com/adhikariprivate/rcfin-server/jellyfin"
+	"github.com/adhikariprivate/rcfin-server/muxnormalizer"
 )
 
 type configFile struct {
@@ -64,7 +64,7 @@ func main() {
 	viper.SetDefault("listen.port", "8096")
 	viper.SetDefault("logfile", "/dev/stdout")
 
-	pflag.String("config", "jellofin-server.yaml", "Path to configuration file.")
+	pflag.String("config", "rcfin.yaml", "Path to configuration file.")
 	viper.BindPFlag(configFileNameKey, pflag.Lookup("config"))
 	pflag.Parse()
 

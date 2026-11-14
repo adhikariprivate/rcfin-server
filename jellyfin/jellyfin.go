@@ -8,10 +8,10 @@ import (
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 
-	"github.com/erikbos/jellofin-server/collection"
-	"github.com/erikbos/jellofin-server/database"
-	"github.com/erikbos/jellofin-server/idhash"
-	"github.com/erikbos/jellofin-server/imageresize"
+	"github.com/adhikariprivate/rcfin-server/collection"
+	"github.com/adhikariprivate/rcfin-server/database"
+	"github.com/adhikariprivate/rcfin-server/idhash"
+	"github.com/adhikariprivate/rcfin-server/imageresize"
 )
 
 // API definitions: https://swagger.emby.media/ & https://api.jellyfin.org/
@@ -76,7 +76,7 @@ func New(o *Options) *Jellyfin {
 		}
 	}
 	if j.serverName == "" {
-		j.serverName = "Jellofin"
+		j.serverName = "RCFin"
 	}
 	return j
 }

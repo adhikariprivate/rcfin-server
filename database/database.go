@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/erikbos/jellofin-server/database/model"
-	"github.com/erikbos/jellofin-server/database/sqlite"
+	"github.com/adhikariprivate/rcfin-server/database/model"
+	"github.com/adhikariprivate/rcfin-server/database/sqlite"
 )
 
 // Database repo aggregates the repo interfaces.

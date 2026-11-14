@@ -4,7 +4,7 @@ import (
 	"context"
 	"log"
 
-	"github.com/erikbos/jellofin-server/database/model"
+	"github.com/adhikariprivate/rcfin-server/database/model"
 )
 
 // GetPlaylist returns a playlist for the given user and playlist ID.

@@ -12,8 +12,8 @@ import (
 
 	"github.com/gorilla/mux"
 
-	"github.com/erikbos/jellofin-server/collection"
-	"github.com/erikbos/jellofin-server/database/model"
+	"github.com/adhikariprivate/rcfin-server/collection"
+	"github.com/adhikariprivate/rcfin-server/database/model"
 )
 
 // /Shows/rXlq4EHNxq4HIVQzw3o2/Episodes?UserId=2b1ec0a52b09456c9823a367d84ac9e5&ExcludeLocationTypes=Virtual&SeasonId=rXlq4EHNxq4HIVQzw3o2/1

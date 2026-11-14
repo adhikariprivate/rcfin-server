@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/erikbos/jellofin-server/database/model"
+	"github.com/adhikariprivate/rcfin-server/database/model"
 )
 
 // GetUser retrieves a user.

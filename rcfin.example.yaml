@@ -1,17 +1,14 @@
 listen:
   port: 8096
 
-cachedir: /var/tmp/jellofin-img-cache
-appdir: /usr/local/jellofin/ui
-dbdir: /usr/local/jellofin/db
-
+cachedir: /var/tmp/rcfin-img-cache
 database:
   sqlite:
-    filename: /usr/local/jellofin/db/jellofin.db
+    filename: /usr/local/rcfin/db/rcfin.db
 
 
 jellyfin:
-  servername: jellofin
+  servername: RCFin
   autoregister: yes
   imagequalityposter: 40
 

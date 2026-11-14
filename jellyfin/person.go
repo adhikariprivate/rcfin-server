@@ -10,7 +10,7 @@ import (
 
 	"github.com/gorilla/mux"
 
-	"github.com/erikbos/jellofin-server/collection/metadata"
+	"github.com/adhikariprivate/rcfin-server/collection/metadata"
 )
 
 // /Persons

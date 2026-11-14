@@ -5,7 +5,7 @@
 *.so
 *.dylib
 bin/*
-jellofin-server
+rcfin-server
 
 # Test binary, built with `go test -c`
 *.test
@@ -22,8 +22,8 @@ todo.txt
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
-jellofin-server.cfg
-jellofin-server*.yaml
-!jellofin-server.example.yaml
+rcfin.cfg
+rcfin*.yaml
+!rcfin.example.yaml
 screenlog.*
 *.db

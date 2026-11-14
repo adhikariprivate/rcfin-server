@@ -7,7 +7,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
-	"github.com/erikbos/jellofin-server/database/model"
+	"github.com/adhikariprivate/rcfin-server/database/model"
 )
 
 // GetAccessToken returns accesstoken details based upon tokenid.

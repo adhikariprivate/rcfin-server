@@ -1,192 +1,78 @@
-# Jellofin Server
+# RCFin
 
-This is the Jellofin Media Server. It serves media libraries through the Jellyfin API.
+RCFin is a lightweight media server that exposes a partial Jellyfin-compatible API. It scans movie and TV-show libraries, reads Kodi-style NFO metadata, keeps user and library state in a local SQLite database, and serves original media files to compatible clients.
 
-## Jellyfin API
+RCFin is a fork of [Jellofin Server](https://github.com/erikbos/jellofin-server). RCFin continues that project as a separately named fork and uses Jellyfin as its client-facing API.
 
-This server supports a subset of the [Jellyfin API](https://api.jellyfin.org/). Most (all?) of the collection and media library endpoints are implemented. All contents is served as is. Transcoding of contents is not supported and is not foreseen to be added.
+## Features and compatibility
 
-### Tested clients
+- **Jellyfin API compatibility:** Partial. Implemented areas include authentication and user management, Quick Connect, library and item browsing, movie and TV metadata, search, artwork, playback information, direct video streaming, and user playback state. The implementation returns Jellyfin-shaped responses for these supported routes; it does not implement the complete Jellyfin API. Unsupported operations include transcoding, remuxing, and Jellyfin features or endpoints not implemented by RCFin.
+- **Media storage:** The current scanner and media handlers use filesystem paths. Native Rclone-backed storage is planned but is not implemented in this revision; collection roots must still be filesystem paths. No Rclone version compatibility is declared yet. The intended design is to embed Rclone, allow each library to select its own configured upstream, and keep SQLite and caches local.
+- **Transcoding:** Not supported. RCFin serves original media files and does not transcode or remux them.
+- **Notflix:** Not supported. Notflix API compatibility has been removed.
 
-The following clients can connect to Jellofin:
+### Compatible clients
 
-| Client                                           | Status | Notes                     |
-| :----------------------------------------------: | :----: | :-----------------------: |
-| [Infuse](https://firecore.com/infuse)            | ✅      | Full player functionality |
-| [Senplayer](https://apps.apple.com/ca/app/senplayer-video-media-player/id6443975850) | ✅      | Full player functionality |
-| [Streamyfin](https://streamyfin.app/)            | ✅      | Full player functionality |
-| [VidHub](https://okaapps.com/product/1659622164) | ✅      | Full player functionality |
+These clients were reported to work with the original Jellofin Server. They have not all been re-verified against the current RCFin fork:
 
-## Installation
+| Client | Reported status |
+| --- | --- |
+| [Infuse](https://firecore.com/infuse) | Full player functionality upstream |
+| [SenPlayer](https://apps.apple.com/ca/app/senplayer-video-media-player/id6443975850) | Full player functionality upstream |
+| [Streamyfin](https://streamyfin.app/) | Full player functionality upstream |
+| [VidHub](https://okaapps.com/product/1659622164) | Full player functionality upstream |
 
-1. run `go build` to compile `jellofin-server`
-2. copy `jellofin-server.example.yaml` to `jellofin-server.yaml` and edit collection configuration details
-3. run `./jellofin-server` to start the server
+## Quick start
 
-## Configuration File
+Install the pinned Go version and run the development build with [mise](https://mise.jdx.dev/):
 
-The server uses a YAML configuration file (default: `jellofin-server.yaml`). Below are all supported configuration values and their descriptions:
-
-## Top-level keys
-
-| Key           | Type    | Description                                                                 |
-|---------------|---------|-----------------------------------------------------------------------------|
-| `listen`      | object  | Network settings for the server.                                            |
-| `cachedir`    | string  | Path to the directory for image cache storage.                              |
-| `dbdir`       | string  | Legacy: directory where a DB file may be stored (kept for backwards compat).|
-| `database`    | object  | Database backend configuration.                                             |
-| `logfile`     | string  | Log output: file path, `stdout`, `syslog`, or `none`.                       |
-| `collections` | array   | List of media collections served by the server.                             |
-| `jellyfin`    | object  | Jellyfin API-specific settings.                                             |
-
----
-
-### `listen` section
-
-| Key       | Type   | Description                                  |
-|-----------|--------|----------------------------------------------|
-| `address` | string | Address to bind the server (e.g., `0.0.0.0`).|
-| `port`    | int    | Port to listen on (e.g., `8096`).            |
-| `tlscert` | string | Path to TLS certificate file (optional).     |
-| `tlskey`  | string | Path to TLS private key file (optional).     |
-| `ipacl`   | string | IP allow list, If set only matching CIDRs may access the server (e.g. `127.0.0.1/32, 192.168.1.0/24`). |
-
----
-
-### `database` section
-
-The current default database driver is for SQLite. Configure the sqlite backend *under* the `database` key.
-
-| Key               | Type   | Description                                                                   |
-| ----------------- | ------ | ----------------------------------------------------------------------------- |
-| `sqlite`          | object | SQLite-specific configuration.                                                |
-| `sqlite.filename` | string | Full path to the sqlite database file (e.g. `/var/lib/jellofin/jellofin.db`). |
-
----
-
-### `collections` section
-
-Each entry defines a media collection:
-
-| Key         | Type   | Description                                                     |
-| ----------- | ------ | --------------------------------------------------------------- |
-| `id`        | string | Optional override for collection ID (expert use!).              |
-| `name`      | string | Display name of the collection.                                 |
-| `type`      | string | Type of collection: `movies`, `shows`.                          |
-| `directory` | string | Path to the media files. |
-| `hlsserver` | string | URL of the HLS server for streaming (optional).                 |
-
----
-
-### `jellyfin` section
-
-| Key                  | Type    | Description                                                  |
-| -------------------- | ------- | ------------------------------------------------------------ |
-| `servername`         | string  | Name of the server as shown to clients.                      |
-| `autoregister`       | boolean | If set to true, unknown users will be auto registered        |
-| `imagequalityposter` | int     | Poster image quality (1-100, lower = smaller).               |
-| `serverid`           | string  | Optional override for server ID (expert use!).               |
-| `quickconnect`       | boolean | If true, enable Quick Connect for client that support it.    |
-
----
-
-## Example configuration file
-
-```yaml
-listen:
-  address: 0.0.0.0
-  port: 8096
-
-cachedir: /srv/jellofin/cache
-logfile: stdout
-
-database:
-  sqlite:
-    filename: /usr/local/jellofin/db/jellofin.db
-
-collections:
-  - id: movies
-    name: Movies
-    type: movies
-    directory: /srv/media/movies
-    hlsserver: http://localhost:6453/media/movies/
-  - id: shows
-    name: TV Shows
-    type: shows
-    directory: /srv/media/shows
-    hlsserver: http://localhost:6453/media/shows/
-
-jellyfin:
-  servername: My media server
-  imagequalityposter: 50
-  autoregister: true
-  quickconnect: true
+```sh
+mise install
+mise run build
+cp rcfin.example.yaml rcfin.yaml
+./bin/rcfin --config rcfin.yaml
 ```
 
-## Collection format
+Edit `rcfin.yaml` before starting the server. Set the SQLite filename and collection directories to paths available on the host. SQLite remains local. The default HTTP port is `8096`.
 
-Every collection has a type, either `movies` or `tvshows`.
+## Configuration
 
-For type `movies` the expected directory format and file naming is:
+- `listen`: bind address, port, optional TLS certificate and key, and optional IP allow list.
+- `database.sqlite.filename`: local SQLite database path.
+- `cachedir`: local image cache path.
+- `collections`: library ID, display name, type (`movies` or `shows`), and filesystem directory. The expected Kodi-style folder layouts are described below.
+- `jellyfin`: server name and supported user / Quick Connect settings.
+- `logfile`: log destination; use `stdout` or `none` as needed.
+
+See [`rcfin.example.yaml`](rcfin.example.yaml) for a complete example.
+
+## Library layout
+
+Movie libraries have one directory per movie, containing the video and optional NFO and artwork files:
 
 ```text
 movies/
 ├── Movie 1 (1984)/
-│   └── movie.mp4
+│   ├── Movie 1 (1984).mkv
+│   ├── movie.nfo
+│   └── poster.jpg
 └── Movie 2 (2001)/
-    └── movie.mp4
+    └── Movie 2 (2001).mp4
 ```
 
-For type `tvshows` the expected directory format and file naming is:
+TV libraries have a directory per show and season directories containing episode files:
 
 ```text
-tvshows/
-└── ShowName/
-    ├── Season 1/
-    │   ├── S01E01 - EpisodeName.mp4
-    │   └── S01E02 - EpisodeName.mp4
-    └─── Season 2/
-        ├── S02E01 - EpisodeName.mp4
-        └── S02E02 - EpisodeName.mp4
+tv/
+└── Show Name/
+    ├── tvshow.nfo
+    └── Season 1/
+        ├── Show Name S01E01.mkv
+        └── Show Name S01E02.mkv
 ```
 
-Tvshows season number 0 are renamed to 'Specials' and have 99 as internal to force them to appear as "last" season.
+Nested movie grouping directories and mixed movie/show layouts in one collection are not supported. Add each root as its own collection.
 
-### Unsupported folder layouts:
+## Development and contributions
 
-Nested folders are not supported:
-
-```text
-movies/
-├── History/
-│   └── Movie 1 (1984)/
-│       └── movie.mp4
-│   └── Movie 2 (2001)/
-│       └── movie.mp4
-```
-
-_Workaround: specify each subfolder individually in configuration._
-
-2. Mixed Movies & Shows
-
-Unsupported:
-
-```text
-movies/
-├── Movie 1 (1984)/
-│   └── movie.mp4
-└── ShowName/
-│   ├── Season 1/
-│   │   ├── S01E01 - EpisodeName.mp4
-│   │   └── S01E02 - EpisodeName.mp4
-└── Movie 2 (2001)/
-    └── movie.mp4
-```
-
-### Data
-
-Collections are indexed from their configured storage roots and served through Jellyfin item and video endpoints.
-
-## Acknowledgements
-
-- [https://jellyfin.org](jellyfin.org) for an awesome Mediaserver initiative.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, development commands, and contribution guidelines. RCFin is licensed under the MIT License; see [LICENSE](LICENSE).

@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/erikbos/jellofin-server/database/model"
+	"github.com/adhikariprivate/rcfin-server/database/model"
 )
 
 // HasImage checks if an image exists for the given itemID and type

@@ -11,7 +11,7 @@ import (
 
 	"github.com/jxskiss/base62"
 
-	"github.com/erikbos/jellofin-server/collection"
+	"github.com/adhikariprivate/rcfin-server/collection"
 )
 
 const (

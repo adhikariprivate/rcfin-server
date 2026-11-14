@@ -6,7 +6,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/erikbos/jellofin-server/collection/search"
+	"github.com/adhikariprivate/rcfin-server/collection/search"
 )
 
 // BuildSearchIndex builds the search index for the collection repository.

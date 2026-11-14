@@ -3,7 +3,7 @@ package sqlite
 import (
 	"context"
 
-	"github.com/erikbos/jellofin-server/database/model"
+	"github.com/adhikariprivate/rcfin-server/database/model"
 )
 
 // GetQuickConnectCodeBySecret retrieves a quick connect code for a user by secret string.

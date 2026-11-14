@@ -16,7 +16,7 @@ import (
 
 	"github.com/gorilla/mux"
 
-	"github.com/erikbos/jellofin-server/collection"
+	"github.com/adhikariprivate/rcfin-server/collection"
 )
 
 // /Items/f137a2dd21bbc1b99aa5c0f6bf02a805
