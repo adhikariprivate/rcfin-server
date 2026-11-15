@@ -29,6 +29,8 @@ import (
 
 type RefreshOptions struct {
 	InboxOnly         bool
+	Force             bool
+	AlgorithmVersion  int
 	Inventory         []collection.InventoryEntry
 	ItemPaths         []string
 	Journal           database.MediaOperationRepo
@@ -40,6 +42,8 @@ type RefreshOptions struct {
 	Write             bool
 	MinimumConfidence float64
 }
+
+const AlgorithmVersion = 2
 
 type SubtitleAction struct {
 	Source      string                   `json:"source"`
@@ -147,9 +151,15 @@ func Refresh(ctx context.Context, coll *collection.Collection, client *OpenSubti
 							continue
 						}
 					case "complete":
-						if time.Since(oldOperation.UpdatedAt) < 24*time.Hour {
-							report.Actions = append(report.Actions, SubtitleAction{Source: video.Path, Language: lang, State: "skipped", Reason: "refresh interval has not elapsed"})
-							continue
+						if !opts.Force {
+							if hasMatchingSubtitle(inventory, video, lang, opts.Forced, opts.HearingImpaired) {
+								report.Actions = append(report.Actions, SubtitleAction{Source: video.Path, Language: lang, State: "skipped", Reason: "matching local subtitle already exists"})
+								continue
+							}
+							if !previousSubtitleWasWritten(oldOperation) {
+								report.Actions = append(report.Actions, SubtitleAction{Source: video.Path, Language: lang, State: "skipped", Reason: "previous subtitle decision is current"})
+								continue
+							}
 						}
 					case "running":
 						if time.Now().Before(oldOperation.LeaseUntil) {
@@ -265,6 +275,14 @@ func oldSubtitleTieNeedsRerank(operation *model.MediaOperation) bool {
 	return operation != nil && operation.Status == "needs_review" && operation.Error == "top subtitle candidates are too close"
 }
 
+func previousSubtitleWasWritten(operation *model.MediaOperation) bool {
+	if operation == nil {
+		return false
+	}
+	var evidence subtitleJobEvidence
+	return json.Unmarshal([]byte(operation.Evidence), &evidence) == nil && evidence.Detail.State == "written"
+}
+
 type subtitleJobEvidence struct {
 	Signature     string          `json:"signature"`
 	ConfigVersion int             `json:"config_version"`
@@ -281,7 +299,9 @@ func subtitleJobConfiguration(opts RefreshOptions) json.RawMessage {
 		Formats                                    []string
 		HearingImpaired, Forced, OverwriteExisting bool
 		MinimumConfidence                          float64
-	}{opts.InboxOnly, opts.Languages, opts.Formats, opts.HearingImpaired, opts.Forced, opts.OverwriteExisting, opts.MinimumConfidence})
+		Force                                      bool
+		AlgorithmVersion                           int
+	}{opts.InboxOnly, opts.Languages, opts.Formats, opts.HearingImpaired, opts.Forced, opts.OverwriteExisting, opts.MinimumConfidence, opts.Force, opts.AlgorithmVersion})
 	return configuration
 }
 
@@ -291,7 +311,9 @@ func subtitleJobSignature(video collection.InventoryEntry, language string, opts
 		Formats                            []string
 		HearingImpaired, Forced, Overwrite bool
 		InboxOnly                          bool
-	}{language, opts.Formats, opts.HearingImpaired, opts.Forced, opts.OverwriteExisting, opts.InboxOnly})
+		Force                              bool
+		AlgorithmVersion                   int
+	}{language, opts.Formats, opts.HearingImpaired, opts.Forced, opts.OverwriteExisting, opts.InboxOnly, opts.Force, opts.AlgorithmVersion})
 	data, _ := json.Marshal(struct {
 		Path          string
 		Size, ModTime int64

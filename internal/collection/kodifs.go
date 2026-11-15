@@ -41,6 +41,10 @@ func (cr *CollectionRepo) buildMovies(ctx context.Context, coll *Collection, pac
 		log.Printf("Unable to inventory movie library %q: %v", coll.Name, inventoryErr)
 		return
 	}
+	return cr.buildMoviesFromInventory(ctx, coll, pace, inventory)
+}
+
+func (cr *CollectionRepo) buildMoviesFromInventory(ctx context.Context, coll *Collection, pace time.Duration, inventory []InventoryEntry) (items []Item) {
 	videoByDirectory := map[string][]string{}
 	for _, entry := range inventory {
 		if entry.Role == InventoryVideo && !entry.IsDir {
@@ -296,6 +300,10 @@ func (cr *CollectionRepo) buildShows(ctx context.Context, coll *Collection, pace
 		log.Printf("Unable to inventory TV library %q: %v", coll.Name, inventoryErr)
 		return
 	}
+	return cr.buildShowsFromInventory(ctx, coll, pace, inventory)
+}
+
+func (cr *CollectionRepo) buildShowsFromInventory(ctx context.Context, coll *Collection, pace time.Duration, inventory []InventoryEntry) (items []Item) {
 	playablePaths := map[string]InventoryEntry{}
 	showDirectories := map[string]bool{}
 	for _, entry := range inventory {

@@ -168,12 +168,13 @@ request (for example `en`) treats regional sidecars (for example `en-US`) as
 matching, while a region-specific request remains exact. RCFin currently does
 not probe embedded media subtitle streams, so those tracks are not considered
 by automatic subtitle acquisition.
-The intake loop waits for the configured completion marker or a stable
-size/modification-time interval, then runs enabled metadata and subtitle work
-independently of organization. Stability is tracked per Inbox item, so an
-unfinished upload does not block enrichment for other stable items. It
-normalizes paths only when organization is enabled. Organization is disabled
-by default and `dry_run` defaults to true.
+The unified per-library cycle inventories the playable library and Inbox once.
+It waits for the configured completion marker or a stable full-tree interval
+before an Inbox item can be classified or enriched. Unfinished items remain
+pending while other ready items proceed. For ready Inbox arrivals, enabled
+provisioning runs before metadata, and subtitles run after metadata. Existing
+library items are not automatically organized. Organization is disabled by
+default and `dry_run` defaults to true.
 When organization runs, unrecognized files in an Inbox item produce a
 `needs_review` report and prevent the containing item from moving. In a
 write-enabled run, that review state is also kept in the media operation
@@ -245,33 +246,20 @@ free for non-commercial use with attribution; deployments with a commercial
 primary purpose must obtain the appropriate license directly from TMDb. See
 [TMDb's official FAQ and attribution requirements](https://developer.themoviedb.org/docs/faq).
 
-Administrators can inspect and queue media operations through the authenticated
-HTTP API. `GET /Admin/MediaOperations?collection_id=movies&limit=100` returns
-a page of journal entries and a `next_cursor`; pass that cursor to fetch the
-next page. `POST /Admin/MediaOperations/Retry` accepts
-`{"collection_id":"movies","item_key":".Inbox/Film (2024)","action":"move_directory:root"}`
-for a failed operation. `POST /Admin/MediaOperations/Refresh` accepts
-`{"collection_id":"movies","item_key":"Film (2024)/Film.mkv"}`; omitting
-`item_key` queues every completed metadata/subtitle operation in the library.
-Queue endpoints return HTTP 202. The corresponding feature must be enabled in
-the library configuration for a background worker to process the queued work.
-Review and conflict states cannot be retried through this API.
-After an administrator resolves the underlying identity or destination issue,
-the next organization run rebuilds the plan and requeues an old journal entry
-only if fresh matching and destination preflight now produce a valid planned
-operation. An unchanged ambiguous or conflicting item remains in review.
+Administrative media operations are CLI-only. Use `rcfin library scan LIBRARY`
+to list and reconcile the library plus Inbox, then `rcfin library status
+LIBRARY` to inspect the last saved inventory. `rcfin library refresh metadata
+LIBRARY [--item PATH]` and `rcfin library refresh subtitles LIBRARY [--item
+PATH] [--language LANG]` explicitly request provider work; `--replace` is scoped
+to the selected stage. `rcfin library inbox stage LIBRARY ITEM_PATH` queues a
+same-library move into Inbox, where ordinary transfer-readiness checks apply.
+The running server recovers queued operations during its next library cycle.
+
 Workers renew active media-operation leases during long provider or storage
 work. If a repository reports that a worker no longer owns a lease, its
 operation context is canceled so it stops issuing further changes. Final
 journal writes carry the claimant's worker ID; SQLite and PostgreSQL reject a
 write from an older owner while a newer owner is running the operation.
-To explicitly stage an existing movie or show directory for Inbox enrichment,
-an administrator can POST a JSON body containing collection_id and item_key
-to /Admin/MediaOperations/Stage. The server journals a same-library DirMove
-into the configured Inbox, refuses existing destinations and read-only or
-unsupported backends, and processes the request independently of automatic
-organization settings. The Inbox directory must already exist; after the
-move, normal upload-stability and enrichment rules apply.
 After a staging move or normalization attempt, RCFin rescans that collection
 and rebuilds the Jellyfin search index so clients see current paths without
 waiting for the periodic rescan. Failed or interrupted write-enabled attempts

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -84,7 +85,13 @@ func runManagementCommand(configPath string, args []string) error {
 		if len(args) >= 2 && args[1] == "status" {
 			return runLibraryStatusCommand(ctx, repo, config.Collections, args[2:])
 		}
-		return errors.New("usage: rcfin library <list|scan LIBRARY_ID|status LIBRARY_ID>")
+		if len(args) >= 2 && args[1] == "refresh" {
+			return runLibraryRefreshCommand(ctx, repo, config, args[2:])
+		}
+		if len(args) >= 2 && args[1] == "inbox" {
+			return runLibraryInboxCommand(ctx, repo, config, args[2:])
+		}
+		return errors.New("usage: rcfin library <list|scan LIBRARY_ID|status LIBRARY_ID|refresh metadata|subtitles LIBRARY_ID|inbox stage LIBRARY_ID ITEM_PATH>")
 	case "user":
 		return runUserCommand(ctx, repo, config.Collections, args[1:])
 	case "media":
@@ -92,6 +99,241 @@ func runManagementCommand(configPath string, args []string) error {
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func runLibraryInboxCommand(ctx context.Context, repo database.Repository, config configFile, args []string) error {
+	if len(args) != 3 || args[0] != "stage" {
+		return errors.New("usage: rcfin library inbox stage LIBRARY_ID ITEM_PATH")
+	}
+	libraryID, source := args[1], args[2]
+	var selected *collectionConfig
+	for i := range config.Collections {
+		if config.Collections[i].ID == libraryID {
+			selected = &config.Collections[i]
+			break
+		}
+	}
+	if selected == nil {
+		return fmt.Errorf("unknown library ID %q", libraryID)
+	}
+	if err := rclonestore.Configure(config.Rclone.Config, config.Rclone.CacheDir); err != nil {
+		return fmt.Errorf("configure Rclone: %w", err)
+	}
+	storage, err := rclonestore.New(ctx, selected.Remote, selected.VFS)
+	if err != nil {
+		return fmt.Errorf("open library remote: %w", err)
+	}
+	defer storage.Close()
+	inbox := selected.Media.InboxPath
+	if inbox == "" {
+		inbox = ".Inbox"
+	}
+	coll := &collection.Collection{ID: selected.ID, Name: selected.Name, Type: collection.CollectionType(selected.Type), Remote: selected.Remote, Storage: storage, InboxPath: inbox}
+	operation, err := organization.QueueExistingItemForInbox(ctx, coll, repo, source)
+	if err != nil {
+		return fmt.Errorf("stage existing item: %w", err)
+	}
+	return json.NewEncoder(os.Stdout).Encode(operation)
+}
+
+func runLibraryRefreshCommand(ctx context.Context, repo database.Repository, config configFile, args []string) error {
+	if len(args) < 2 {
+		return errors.New("usage: rcfin library refresh <metadata|subtitles> LIBRARY_ID [--item PATH] [--language LANG] [--replace]")
+	}
+	stage, libraryID := args[0], args[1]
+	if stage != "metadata" && stage != "subtitles" {
+		return fmt.Errorf("unsupported refresh stage %q; expected metadata or subtitles", stage)
+	}
+	var selected *collectionConfig
+	for i := range config.Collections {
+		if config.Collections[i].ID == libraryID {
+			selected = &config.Collections[i]
+			break
+		}
+	}
+	if selected == nil {
+		return fmt.Errorf("unknown library ID %q", libraryID)
+	}
+	flags := pflag.NewFlagSet("library refresh", pflag.ContinueOnError)
+	itemPath := flags.String("item", "", "Item path, file or containing folder")
+	replace := flags.Bool("replace", false, "Allow replacing this stage's existing outputs")
+	language := flags.StringArray("language", nil, "Subtitle language (repeatable; subtitles stage only)")
+	if err := flags.Parse(args[2:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("unexpected arguments after library refresh flags")
+	}
+	if stage == "metadata" && len(*language) > 0 {
+		return errors.New("--language is only valid for subtitle refresh")
+	}
+	if err := rclonestore.Configure(config.Rclone.Config, config.Rclone.CacheDir); err != nil {
+		return fmt.Errorf("configure Rclone: %w", err)
+	}
+	storage, err := rclonestore.New(ctx, selected.Remote, selected.VFS)
+	if err != nil {
+		return fmt.Errorf("open library remote: %w", err)
+	}
+	defer storage.Close()
+	inbox := selected.Media.InboxPath
+	if inbox == "" {
+		inbox = ".Inbox"
+	}
+	coll := &collection.Collection{ID: selected.ID, Name: selected.Name, Type: collection.CollectionType(selected.Type), Remote: selected.Remote, Storage: storage, InboxPath: inbox}
+	storage.FlushDirCache()
+	inventory, err := collection.InventoryLibrary(ctx, coll, inbox)
+	if err != nil {
+		return fmt.Errorf("inventory library: %w", err)
+	}
+	if _, err := collection.ReconcileLibraryInventory(ctx, repo, libraryID, inventory, time.Now().UTC(), currentInventoryProcessingVersions()); err != nil {
+		return fmt.Errorf("save inventory snapshot: %w", err)
+	}
+	pathsByScope, err := selectRefreshPaths(inventory, *itemPath)
+	if err != nil {
+		return err
+	}
+	readyInbox, err := readyInboxVideoPaths(ctx, coll, repo, *selected, inventory)
+	if err != nil {
+		return fmt.Errorf("check Inbox readiness: %w", err)
+	}
+	readySet := make(map[string]bool, len(readyInbox))
+	for _, path := range readyInbox {
+		readySet[path] = true
+	}
+	filteredInbox := make([]string, 0, len(pathsByScope[collection.InventoryScopeInbox]))
+	for _, path := range pathsByScope[collection.InventoryScopeInbox] {
+		if readySet[path] {
+			filteredInbox = append(filteredInbox, path)
+		}
+	}
+	if *itemPath != "" && len(pathsByScope[collection.InventoryScopeInbox]) > 0 && len(filteredInbox) == 0 && len(pathsByScope[collection.InventoryScopeLibrary]) == 0 {
+		return fmt.Errorf("Inbox item %q is still pending transfer; wait for its completion marker or stable_for interval", *itemPath)
+	}
+	pathsByScope[collection.InventoryScopeInbox] = filteredInbox
+	if len(pathsByScope[collection.InventoryScopeInbox])+len(pathsByScope[collection.InventoryScopeLibrary]) == 0 {
+		return errors.New("no matching video files found for refresh")
+	}
+
+	switch stage {
+	case "metadata":
+		policy := selected.Media.Metadata
+		if !policy.FetchNFO && !policy.FetchArtwork {
+			return errors.New("metadata refresh has no configured output; enable fetch_nfo or fetch_artwork")
+		}
+		keyEnv := strings.TrimSpace(policy.APIKeyEnv)
+		if keyEnv == "" {
+			keyEnv = "RCFIN_TMDB_API_KEY"
+		}
+		client, err := provider.NewTMDb(os.Getenv(keyEnv), mediaHTTPClient(policy.RequestTimeout))
+		if err != nil {
+			return fmt.Errorf("metadata provider credential environment variable %s is empty", keyEnv)
+		}
+		if policy.RetryLimit > 0 {
+			client.SetRetryLimit(policy.RetryLimit)
+		}
+		if *replace {
+			policy.OverwriteExisting = true
+			policy.OverwriteArtwork = true
+		}
+		var reports []metadatarefresh.Report
+		for _, scope := range []string{collection.InventoryScopeLibrary, collection.InventoryScopeInbox} {
+			paths := pathsByScope[scope]
+			if len(paths) == 0 {
+				continue
+			}
+			report, err := metadatarefresh.Run(ctx, coll, client, metadatarefresh.Options{
+				Write: true, Force: true, AlgorithmVersion: metadatarefresh.AlgorithmVersion,
+				InboxOnly: scope == collection.InventoryScopeInbox, Inventory: inventory, ItemPaths: paths,
+				Journal: repo, FetchNFO: policy.FetchNFO, FetchArtwork: policy.FetchArtwork,
+				OverwriteExisting: policy.OverwriteExisting, OverwriteArtwork: policy.OverwriteArtwork,
+				Language: policy.Language, FallbackLanguages: policy.FallbackLanguages,
+				ArtworkMaxBytes: policy.ArtworkMaxBytes, ArtworkMaxWidth: policy.ArtworkMaxWidth,
+				ArtworkMaxHeight: policy.ArtworkMaxHeight, ArtworkFormats: policy.ArtworkFormats,
+				ArtworkPosterSize: policy.ArtworkPosterSize, ArtworkBackdropSize: policy.ArtworkBackdropSize,
+				MinimumConfidence: policy.MinimumConfidence,
+			})
+			if err != nil {
+				return fmt.Errorf("metadata refresh: %w", err)
+			}
+			reports = append(reports, report)
+		}
+		return json.NewEncoder(os.Stdout).Encode(reports)
+	case "subtitles":
+		policy := selected.Media.Subtitles
+		keyEnv, usernameEnv, passwordEnv := strings.TrimSpace(policy.APIKeyEnv), strings.TrimSpace(policy.UsernameEnv), strings.TrimSpace(policy.PasswordEnv)
+		if keyEnv == "" {
+			keyEnv = "RCFIN_OPENSUBTITLES_API_KEY"
+		}
+		if usernameEnv == "" {
+			usernameEnv = "RCFIN_OPENSUBTITLES_USERNAME"
+		}
+		if passwordEnv == "" {
+			passwordEnv = "RCFIN_OPENSUBTITLES_PASSWORD"
+		}
+		client, err := subtitles.NewOpenSubtitles(os.Getenv(keyEnv), os.Getenv(usernameEnv), os.Getenv(passwordEnv), mediaHTTPClient(policy.RequestTimeout))
+		if err != nil {
+			return fmt.Errorf("subtitle provider credential environment variable %s is empty", keyEnv)
+		}
+		if policy.RetryLimit > 0 {
+			client.SetRetryLimit(policy.RetryLimit)
+		}
+		if policy.MaxDownloadBytes > 0 {
+			client.SetMaxDownloadBytes(policy.MaxDownloadBytes)
+		}
+		if *replace {
+			policy.OverwriteExisting = true
+		}
+		languages := policy.Languages
+		if len(*language) > 0 {
+			languages = *language
+		}
+		if len(languages) == 0 {
+			return errors.New("subtitle refresh requires at least one configured language or --language")
+		}
+		var reports []subtitles.SubtitleReport
+		for _, scope := range []string{collection.InventoryScopeLibrary, collection.InventoryScopeInbox} {
+			paths := pathsByScope[scope]
+			if len(paths) == 0 {
+				continue
+			}
+			report, err := subtitles.Refresh(ctx, coll, client, subtitles.RefreshOptions{
+				Force: true, AlgorithmVersion: subtitles.AlgorithmVersion,
+				InboxOnly: scope == collection.InventoryScopeInbox, Inventory: inventory, ItemPaths: paths,
+				Journal: repo, Languages: languages, Formats: policy.Formats,
+				HearingImpaired: policy.HearingImpaired, Forced: policy.Forced,
+				OverwriteExisting: policy.OverwriteExisting, MinimumConfidence: policy.MinimumConfidence, Write: true,
+			})
+			if err != nil {
+				return fmt.Errorf("subtitle refresh: %w", err)
+			}
+			reports = append(reports, report)
+		}
+		return json.NewEncoder(os.Stdout).Encode(reports)
+	}
+	return nil
+}
+
+func selectRefreshPaths(inventory []collection.InventoryEntry, requested string) (map[string][]string, error) {
+	paths := map[string][]string{collection.InventoryScopeLibrary: {}, collection.InventoryScopeInbox: {}}
+	requested = strings.TrimSpace(requested)
+	if requested != "" && (path.IsAbs(requested) || path.Clean(requested) != requested || strings.HasPrefix(requested, "../")) {
+		return nil, fmt.Errorf("item path must be a safe library-relative path")
+	}
+	matched := false
+	for _, entry := range inventory {
+		if entry.Role != collection.InventoryVideo || entry.IsDir {
+			continue
+		}
+		if requested != "" && entry.Path != requested && !strings.HasPrefix(entry.Path, requested+"/") {
+			continue
+		}
+		paths[entry.Scope] = appendUnique(paths[entry.Scope], entry.Path)
+		matched = true
+	}
+	if requested != "" && !matched {
+		return nil, fmt.Errorf("no video files matched item path %q", requested)
+	}
+	return paths, nil
 }
 
 func runLibraryScanCommand(ctx context.Context, repo database.Repository, config configFile, args []string) error {
@@ -126,7 +368,7 @@ func runLibraryScanCommand(ctx context.Context, repo database.Repository, config
 	if err != nil {
 		return fmt.Errorf("inventory library: %w", err)
 	}
-	reconciliation, err := collection.ReconcileLibraryInventory(ctx, repo, selected.ID, entries, time.Now().UTC())
+	reconciliation, err := collection.ReconcileLibraryInventory(ctx, repo, selected.ID, entries, time.Now().UTC(), currentInventoryProcessingVersions())
 	if err != nil {
 		return fmt.Errorf("reconcile library inventory: %w", err)
 	}

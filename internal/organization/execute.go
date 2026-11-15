@@ -44,6 +44,20 @@ func OrganizeInboxShows(ctx context.Context, coll *collection.Collection, p prov
 	return organizeInbox(ctx, coll, p, repo, opts, dryRun, worker, planInboxShows)
 }
 
+// RecoverPendingOperations resumes journaled moves before a fresh inventory is
+// built, so the scan sees only their final source/destination state.
+func RecoverPendingOperations(ctx context.Context, coll *collection.Collection, repo database.Repository, worker string) error {
+	if coll == nil || repo == nil {
+		return fmt.Errorf("collection and database repository are required")
+	}
+	if worker == "" {
+		worker = database.NewMediaOperationWorkerID("organization-recovery")
+	}
+	ctx, leaseKeeper, stop := database.StartMediaOperationLeaseKeeper(ctx, repo, worker, 15*time.Minute)
+	defer stop()
+	return recoverPending(ctx, coll, repo, worker, leaseKeeper)
+}
+
 // QueueExistingItemForInbox journals an explicit administrator request to
 // stage one existing movie or show directory for the normal Inbox pipeline.
 // The move is executed by the organization worker and is recoverable by the
@@ -228,7 +242,7 @@ func organizeLibrary(ctx context.Context, coll *collection.Collection, p provide
 	ready := map[string]bool{}
 	var staged []ItemPlan
 	if checkInboxStability {
-		inboxEntries, inventoryErr := collection.InventoryCollection(ctx, coll, coll.InboxPath, true)
+		inboxEntries, inventoryErr := scopedInventory(ctx, coll, opts, true)
 		if inventoryErr != nil {
 			return Report{}, inventoryErr
 		}
@@ -401,7 +415,7 @@ func inboxItemReady(ctx context.Context, coll *collection.Collection, repo datab
 	if stableFor <= 0 {
 		stableFor = 10 * time.Minute
 	}
-	entries, err := collection.InventoryCollection(ctx, coll, coll.InboxPath, true)
+	entries, err := scopedInventory(ctx, coll, opts, true)
 	if err != nil {
 		return false, err
 	}
@@ -409,19 +423,28 @@ func inboxItemReady(ctx context.Context, coll *collection.Collection, repo datab
 		Path    string `json:"path"`
 		Size    int64  `json:"size"`
 		ModTime int64  `json:"mod_time"`
+		IsDir   bool   `json:"is_dir,omitempty"`
 	}
 	var files []itemFile
 	for _, entry := range entries {
-		isMovieFile := entry.Role == collection.InventoryVideo
-		isDiscContent := opts.EnableDiscFolders && coll.Type == collection.CollectionTypeMovies && entry.Role == collection.InventoryDisc
-		if (!isMovieFile && !isDiscContent) || (path.Dir(entry.Path) != source && !strings.HasPrefix(entry.Path, source+"/")) {
+		if entry.Path != source && !strings.HasPrefix(entry.Path, source+"/") {
 			continue
 		}
-		info, statErr := coll.Storage.Stat(entry.Path)
-		if statErr != nil {
-			return false, statErr
+		if entry.Path == source && !entry.IsDir {
+			continue
 		}
-		files = append(files, itemFile{Path: entry.Path, Size: info.Size(), ModTime: info.ModTime().UTC().UnixNano()})
+		if opts.CompletionMarker != "" && path.Base(entry.Path) == opts.CompletionMarker {
+			continue
+		}
+		if opts.Inventory != nil {
+			files = append(files, itemFile{Path: entry.Path, Size: entry.Size, ModTime: entry.ModTime, IsDir: entry.IsDir})
+			continue
+		}
+		if entry.IsDir {
+			files = append(files, itemFile{Path: entry.Path, Size: entry.Size, ModTime: entry.ModTime, IsDir: true})
+			continue
+		}
+		files = append(files, itemFile{Path: entry.Path, Size: entry.Size, ModTime: entry.ModTime})
 	}
 	if len(files) == 0 {
 		return false, nil

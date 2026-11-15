@@ -16,6 +16,8 @@ import (
 )
 
 type Options struct {
+	Inventory                  []collection.InventoryEntry
+	ItemRoots                  []string
 	IncludeProviderID          bool
 	EnableDiscFolders          bool
 	FlattenGroupingDirectories bool
@@ -30,6 +32,32 @@ type Options struct {
 	AllowedExtensions          []string
 	StableFor                  time.Duration
 	CompletionMarker           string
+}
+
+func scopedInventory(ctx context.Context, coll *collection.Collection, opts Options, inboxOnly bool) ([]collection.InventoryEntry, error) {
+	var entries []collection.InventoryEntry
+	var err error
+	if opts.Inventory != nil {
+		entries = collection.InventoryScopeEntries(opts.Inventory, inboxOnly)
+	} else {
+		entries, err = collection.InventoryCollection(ctx, coll, coll.InboxPath, inboxOnly)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if !inboxOnly || len(opts.ItemRoots) == 0 {
+		return entries, nil
+	}
+	filtered := make([]collection.InventoryEntry, 0, len(entries))
+	for _, entry := range entries {
+		for _, root := range opts.ItemRoots {
+			if entry.Path == root || strings.HasPrefix(entry.Path, root+"/") {
+				filtered = append(filtered, entry)
+				break
+			}
+		}
+	}
+	return filtered, nil
 }
 
 type FilePlan struct {
@@ -91,11 +119,11 @@ func planMovieScope(ctx context.Context, coll *collection.Collection, p provider
 	if coll.Type != collection.CollectionTypeMovies {
 		return report, fmt.Errorf("movie planning requires a movies collection")
 	}
-	entries, err := collection.InventoryCollection(ctx, coll, coll.InboxPath, inboxOnly)
+	entries, err := scopedInventory(ctx, coll, opts, inboxOnly)
 	if err != nil {
 		return report, err
 	}
-	occupied, err := collection.InventoryCollection(ctx, coll, coll.InboxPath, false)
+	occupied, err := scopedInventory(ctx, coll, opts, false)
 	if err != nil {
 		return report, err
 	}

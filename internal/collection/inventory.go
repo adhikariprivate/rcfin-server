@@ -207,7 +207,7 @@ func inventoryCollection(ctx context.Context, coll *Collection, inbox, scope str
 			// without treating those ancestor directories as Inbox inventory.
 			leadingToInbox := scope != InventoryScopeLibrary && inbox != "" && strings.HasPrefix(inbox, rel+"/")
 			isInboxRoot := (scope == InventoryScopeInbox || scope == "all") && rel == inbox
-			if name == "" || (strings.HasPrefix(name, ".") && !isInboxRoot && !leadingToInbox) || strings.HasPrefix(name, "+ ") {
+			if name == "" || (strings.HasPrefix(name, ".") && !isInboxRoot && !leadingToInbox && !insideInbox) || strings.HasPrefix(name, "+ ") {
 				continue
 			}
 			if fi.IsDir() {
@@ -224,7 +224,7 @@ func inventoryCollection(ctx context.Context, coll *Collection, inbox, scope str
 				if insideInbox {
 					if format := discDirectoryFormat(name); format != "" && !inventoryExtraPath(rel) {
 						pathIDs, pathConflict := providerIDsInPathWithConflict(rel)
-						disc := InventoryEntry{Path: rel, IsDir: true, Role: InventoryDisc, DiscFormat: format, DiscRoot: rel, ProviderIDs: pathIDs, IdentityConflict: pathConflict, Reason: "disc structure recognized and inventoried separately; playback is not enabled"}
+						disc := InventoryEntry{Path: rel, Scope: InventoryScopeInbox, IsDir: true, Role: InventoryDisc, DiscFormat: format, DiscRoot: rel, ProviderIDs: pathIDs, IdentityConflict: pathConflict, Reason: "disc structure recognized and inventoried separately; playback is not enabled"}
 						movieNFO := path.Join(path.Dir(rel), "movie.nfo")
 						if data, readErr := coll.Storage.ReadFile(movieNFO); readErr == nil {
 							var conflict bool

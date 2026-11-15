@@ -130,6 +130,15 @@ func TestSubtitleJobSignatureChangesWhenProviderIdentityChanges(t *testing.T) {
 	}
 }
 
+func TestSubtitleJobSignatureChangesWhenAlgorithmVersionChanges(t *testing.T) {
+	video := collection.InventoryEntry{Path: "Film/movie.mkv", Role: collection.InventoryVideo, Size: 123, ModTime: 456}
+	first := subtitleJobSignature(video, "en", RefreshOptions{AlgorithmVersion: 1})
+	second := subtitleJobSignature(video, "en", RefreshOptions{AlgorithmVersion: 2})
+	if first == second {
+		t.Fatal("subtitle algorithm version did not invalidate the saved decision")
+	}
+}
+
 func TestRankSubtitleScoresMatchingProviderIDWithoutHash(t *testing.T) {
 	q := queryContext{
 		SearchQuery: SearchQuery{Title: "Musk", Year: 2026, Language: "en"},

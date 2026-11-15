@@ -46,13 +46,13 @@ func planShowScope(ctx context.Context, coll *collection.Collection, p provider.
 	if coll.Type != collection.CollectionTypeShows {
 		return report, fmt.Errorf("TV planning requires a shows collection")
 	}
-	e, err := collection.InventoryCollection(ctx, coll, coll.InboxPath, inboxOnly)
+	e, err := scopedInventory(ctx, coll, opts, inboxOnly)
 	if err != nil {
 		return report, err
 	}
 	existing := e
 	if inboxOnly {
-		existing, err = collection.InventoryCollection(ctx, coll, coll.InboxPath, false)
+		existing, err = scopedInventory(ctx, coll, opts, false)
 		if err != nil {
 			return report, err
 		}

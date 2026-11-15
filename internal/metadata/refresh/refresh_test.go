@@ -46,3 +46,20 @@ func TestMetadataOutputsPresentRequiresPreviouslyWrittenSidecars(t *testing.T) {
 		t.Fatal("NFO-only refresh was treated as incomplete because artwork is disabled")
 	}
 }
+
+func TestMetadataOutputsExistRequiresConfiguredSidecars(t *testing.T) {
+	inventory := []collection.InventoryEntry{
+		{Path: "Musk (2026)/movie.nfo", Role: collection.InventoryNFO},
+		{Path: "Musk (2026)/poster.jpg", Role: collection.InventoryArtwork},
+		{Path: "Musk (2026)/backdrop.jpg", Role: collection.InventoryArtwork},
+	}
+	if !metadataOutputsExist(inventory, "Musk (2026)", "Musk (2026)/movie.nfo", Options{FetchNFO: true, FetchArtwork: true}) {
+		t.Fatal("complete metadata outputs were not recognized")
+	}
+	if metadataOutputsExist(inventory[:2], "Musk (2026)", "Musk (2026)/movie.nfo", Options{FetchNFO: true, FetchArtwork: true}) {
+		t.Fatal("missing backdrop was treated as a complete output set")
+	}
+	if metadataOutputsExist(inventory, "Musk (2026)", "Musk (2026)/movie.nfo", Options{}) {
+		t.Fatal("no configured outputs were treated as complete")
+	}
+}

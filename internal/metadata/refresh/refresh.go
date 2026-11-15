@@ -31,6 +31,8 @@ import (
 
 type Options struct {
 	Write                bool
+	Force                bool
+	AlgorithmVersion     int
 	InboxOnly            bool
 	Inventory            []collection.InventoryEntry
 	ItemPaths            []string
@@ -51,6 +53,8 @@ type Options struct {
 	TieMargin            float64
 	RefreshExistingAfter time.Duration
 }
+
+const AlgorithmVersion = 2
 
 type ItemReport struct {
 	Source           string             `json:"source"`
@@ -143,7 +147,7 @@ func Run(ctx context.Context, coll *collection.Collection, p provider.Provider, 
 			}
 			if existing != nil {
 				signature := metadataJobSignature(entry, opts)
-				forceRefresh = existing.Status == "planned" && journalSignature(existing.Evidence) == signature
+				forceRefresh = opts.Force || existing.Status == "planned" && journalSignature(existing.Evidence) == signature
 				if journalSignature(existing.Evidence) == signature {
 					switch existing.Status {
 					case "needs_review", "failed_terminal":
@@ -155,19 +159,13 @@ func Run(ctx context.Context, coll *collection.Collection, p provider.Provider, 
 							continue
 						}
 					case "complete":
-						refreshAfter := opts.RefreshExistingAfter
-						if refreshAfter <= 0 {
-							refreshAfter = 24 * time.Hour
+						if !opts.Force && metadataOutputsPresent(existing.Evidence, inventory, destination, opts) {
+							report.Items = append(report.Items, ItemReport{Source: entry.Path, Destination: destination, ProviderID: existing.ProviderID, Confidence: existing.Confidence, State: "fresh", Reason: "configured metadata outputs already exist"})
+							continue
 						}
-						if time.Since(existing.UpdatedAt) < refreshAfter {
-							if metadataOutputsPresent(existing.Evidence, inventory, destination, opts) {
-								report.Items = append(report.Items, ItemReport{Source: entry.Path, Destination: destination, ProviderID: existing.ProviderID, Confidence: existing.Confidence, State: "fresh", Reason: "refresh interval has not elapsed"})
-								continue
-							}
-							// The last successful run's sidecars are missing. Ignore
-							// any still-fresh NFO provenance and regenerate outputs.
-							forceRefresh = true
-						}
+						// Restore missing generated outputs, but never refresh a
+						// complete item merely because time elapsed.
+						forceRefresh = true
 					case "running":
 						if time.Now().Before(existing.LeaseUntil) {
 							report.Items = append(report.Items, ItemReport{Source: entry.Path, Destination: destination, ProviderID: existing.ProviderID, Confidence: existing.Confidence, State: "deferred", Reason: "another worker holds the refresh lease"})
@@ -175,6 +173,10 @@ func Run(ctx context.Context, coll *collection.Collection, p provider.Provider, 
 						}
 					}
 				}
+			}
+			if !opts.Force && !forceRefresh && metadataOutputsExist(inventory, sourceDir, destination, opts) {
+				report.Items = append(report.Items, ItemReport{Source: entry.Path, Destination: destination, State: "fresh", Reason: "configured metadata outputs already exist"})
+				continue
 			}
 			claimed, err := beginMetadataOperation(ctx, opts.Journal, coll.ID, entry, opts, existing, worker, leaseKeeper)
 			if err != nil {
@@ -184,6 +186,10 @@ func Run(ctx context.Context, coll *collection.Collection, p provider.Provider, 
 				report.Items = append(report.Items, ItemReport{Source: entry.Path, Destination: destination, State: "deferred", Reason: "another worker claimed the refresh operation"})
 				continue
 			}
+		}
+		if opts.Journal == nil && !opts.Force && !forceRefresh && metadataOutputsExist(inventory, sourceDir, destination, opts) {
+			report.Items = append(report.Items, ItemReport{Source: entry.Path, Destination: destination, State: "fresh", Reason: "configured metadata outputs already exist"})
+			continue
 		}
 		if entry.IdentityConflict {
 			report.Items = append(report.Items, ItemReport{Source: entry.Path, Destination: destination, State: "needs_review", Reason: "provider IDs conflict between the path and local metadata"})
@@ -404,7 +410,9 @@ func metadataJobConfiguration(opts Options) json.RawMessage {
 		ArtworkPosterSize, ArtworkBackdropSize                      string
 		MinimumConfidence, TieMargin                                float64
 		RefreshExistingAfter                                        time.Duration
-	}{opts.InboxOnly, opts.FetchNFO, opts.FetchArtwork, opts.OverwriteExisting, opts.OverwriteArtwork, opts.Language, opts.FallbackLanguages, opts.ArtworkMaxBytes, opts.ArtworkMaxWidth, opts.ArtworkMaxHeight, opts.ArtworkFormats, opts.ArtworkPosterSize, opts.ArtworkBackdropSize, opts.MinimumConfidence, opts.TieMargin, opts.RefreshExistingAfter})
+		Force                                                       bool
+		AlgorithmVersion                                            int
+	}{opts.InboxOnly, opts.FetchNFO, opts.FetchArtwork, opts.OverwriteExisting, opts.OverwriteArtwork, opts.Language, opts.FallbackLanguages, opts.ArtworkMaxBytes, opts.ArtworkMaxWidth, opts.ArtworkMaxHeight, opts.ArtworkFormats, opts.ArtworkPosterSize, opts.ArtworkBackdropSize, opts.MinimumConfidence, opts.TieMargin, opts.RefreshExistingAfter, opts.Force, opts.AlgorithmVersion})
 	return configuration
 }
 
@@ -420,7 +428,9 @@ func metadataJobSignature(entry collection.InventoryEntry, opts Options) string 
 		ArtworkPosterSize, ArtworkBackdropSize                      string
 		MinimumConfidence, TieMargin                                float64
 		RefreshAfter                                                int64
-	}{opts.InboxOnly, opts.FetchNFO, opts.FetchArtwork, opts.OverwriteExisting, opts.OverwriteArtwork, opts.Language, opts.FallbackLanguages, opts.ArtworkMaxBytes, opts.ArtworkMaxWidth, opts.ArtworkMaxHeight, opts.ArtworkFormats, opts.ArtworkPosterSize, opts.ArtworkBackdropSize, opts.MinimumConfidence, opts.TieMargin, int64(opts.RefreshExistingAfter)})
+		Force                                                       bool
+		AlgorithmVersion                                            int
+	}{opts.InboxOnly, opts.FetchNFO, opts.FetchArtwork, opts.OverwriteExisting, opts.OverwriteArtwork, opts.Language, opts.FallbackLanguages, opts.ArtworkMaxBytes, opts.ArtworkMaxWidth, opts.ArtworkMaxHeight, opts.ArtworkFormats, opts.ArtworkPosterSize, opts.ArtworkBackdropSize, opts.MinimumConfidence, opts.TieMargin, int64(opts.RefreshExistingAfter), opts.Force, opts.AlgorithmVersion})
 	data, _ := json.Marshal(struct {
 		Path    string
 		Size    int64
@@ -494,6 +504,36 @@ func metadataOutputsPresent(evidence string, inventory []collection.InventoryEnt
 		}
 	}
 	return true
+}
+
+func metadataOutputsExist(inventory []collection.InventoryEntry, directory, nfoDestination string, opts Options) bool {
+	if opts.FetchNFO {
+		found := false
+		for _, entry := range inventory {
+			if entry.Path == nfoDestination && entry.Role == collection.InventoryNFO {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	if opts.FetchArtwork {
+		poster, backdrop := false, false
+		for _, entry := range inventory {
+			if entry.Role != collection.InventoryArtwork || path.Dir(entry.Path) != directory {
+				continue
+			}
+			name := strings.ToLower(strings.TrimSuffix(path.Base(entry.Path), path.Ext(entry.Path)))
+			poster = poster || name == "poster" || name == "folder" || name == "cover" || name == "movie"
+			backdrop = backdrop || name == "backdrop" || name == "fanart" || name == "background"
+		}
+		if !poster || !backdrop {
+			return false
+		}
+	}
+	return opts.FetchNFO || opts.FetchArtwork
 }
 
 func recordMetadataOperations(ctx context.Context, journal database.MediaOperationRepo, collectionID string, items []ItemReport, inventory []collection.InventoryEntry, opts Options, worker string, leaseKeeper *database.MediaOperationLeaseKeeper) error {

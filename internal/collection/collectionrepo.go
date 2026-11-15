@@ -169,6 +169,32 @@ func (cr *CollectionRepo) RefreshCollection(ctx context.Context, collectionID st
 	return cr.BuildSearchIndex(ctx)
 }
 
+// RefreshCollectionWithInventory updates Jellyfin's in-memory library model
+// from an already completed unified library/Inbox inventory. Scheduled media
+// work uses this to avoid a second remote traversal just to rebuild the index.
+func (cr *CollectionRepo) RefreshCollectionWithInventory(ctx context.Context, collectionID string, inventory []InventoryEntry) error {
+	cr.refreshMu.Lock()
+	defer cr.refreshMu.Unlock()
+	c := cr.GetCollection(collectionID)
+	if c == nil {
+		return fmt.Errorf("collection %q not found", collectionID)
+	}
+	c.stableItemIDs = cr.loadStableItemIDs(ctx, c.ID)
+	playable := InventoryScopeEntries(inventory, false)
+	switch c.Type {
+	case CollectionTypeMovies:
+		cr.buildMoviesFromInventory(ctx, c, 0, playable)
+	case CollectionTypeShows:
+		cr.buildShowsFromInventory(ctx, c, 0, playable)
+	default:
+		return fmt.Errorf("unsupported collection type %q", c.Type)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return cr.BuildSearchIndex(ctx)
+}
+
 // updateCollections updates the collections with the latest content from remote storage.
 // - ScanInterval can be set as wait time between loading details of individual items.
 // This can be useful to avoid overloading the remote with too many requests.

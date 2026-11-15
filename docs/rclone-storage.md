@@ -53,7 +53,7 @@ RCFin starts each VFS with these defaults; a library's `vfs` map overrides any o
 - `vfs_cache_max_size: 20GiB` and `vfs_cache_max_age: 24h` bound the default per-library cache.
 - `vfs_read_chunk_size: 32M` and `vfs_read_chunk_size_limit: 256M` let sequential playback grow read chunks while placing a bound on speculative reads.
 - `vfs_handle_caching: 1m` reuses active remote handles briefly across adjacent range requests.
-- `rescan_interval: 30m` controls the application-level library scan independently of VFS directory caching.
+- `scan_interval: 30m` (global default, optionally overridden by `collections[].media.scan_interval`) controls the single per-library inventory and media-work cycle independently of VFS directory caching.
 
 For providers that support efficient range reads and deployments prioritizing disk conservation, `vfs_cache_mode: off` streams ranges directly and avoids read caching. `minimal` only adds caching for reads opened for both reading and writing; it does not cache ordinary read-only media playback. `full` caches the ranges actually read as sparse files and is the recommended default for varied Jellyfin clients and remotes. Configure `vfs_cache_max_size` and `vfs_cache_max_age` to bound local disk use.
 
@@ -70,6 +70,6 @@ RCFin serves original files. It does not transcode, remux, or create HLS output.
 - `didn't find section in config file`: check that `rclone.config` points to the actual INI file including its filename, then verify the file contains a section matching the part before `:` in the collection's `remote` value.
 - `remote not found in config`: verify that the section name before `:` matches exactly.
 - Backend credentials or token refresh failures: repair/refresh credentials with normal Rclone tools, then restart RCFin so it constructs fresh remotes.
-- Library changes appear late: lower `rescan_interval` and/or `dir_cache_time`; enable `poll_interval` only if the backend supports it.
+- Library changes appear late: lower `scan_interval` and/or `dir_cache_time`; enable `poll_interval` only if the backend supports it.
 - Seeks are slow: check the backend's range-read support, then tune `vfs_read_chunk_size`, `vfs_read_chunk_size_limit`, and `vfs_cache_mode` for that library.
 - Cache disk fills: use `off`, or set per-library `vfs_cache_max_size`/`vfs_cache_max_age` and a suitable global `rclone.cache_dir`.

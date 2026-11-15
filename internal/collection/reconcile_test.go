@@ -103,3 +103,51 @@ func TestReconcileLibraryInventoryDoesNotReplaceSnapshotWhenSaveFails(t *testing
 		t.Fatal("failed save replaced prior complete snapshot")
 	}
 }
+
+func TestReconcileLibraryInventoryOnlyInvalidatesWhenBuildAndAlgorithmBothChange(t *testing.T) {
+	repo := &memoryInventoryRepo{snapshot: &model.LibraryInventorySnapshot{
+		Generation: 1, ServerVersion: "1.0+old",
+		AlgorithmVersions: map[string]int{"metadata": 2, "subtitles": 4},
+		Entries:           []model.LibraryInventoryEntry{{Path: "Film/movie.mkv", Scope: InventoryScopeLibrary, Role: string(InventoryVideo)}},
+	}}
+	versions := InventoryProcessingVersions{ServerVersion: "1.1+new", AlgorithmVersions: map[string]int{"metadata": 2, "subtitles": 4}}
+	result, err := ReconcileLibraryInventory(context.Background(), repo, "movies", []InventoryEntry{{Path: "Film/movie.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo}}, time.Unix(200, 0), versions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.AlgorithmChanges) != 0 {
+		t.Fatalf("build-only change invalidated algorithms: %#v", result.AlgorithmChanges)
+	}
+	versions.ServerVersion = "1.2+newer"
+	versions.AlgorithmVersions = map[string]int{"metadata": 3, "subtitles": 4}
+	result, err = ReconcileLibraryInventory(context.Background(), repo, "movies", []InventoryEntry{{Path: "Film/movie.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo}}, time.Unix(300, 0), versions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.AlgorithmChanges) != 1 || result.AlgorithmChanges[0] != "metadata" {
+		t.Fatalf("algorithm change invalidation = %#v, want metadata", result.AlgorithmChanges)
+	}
+}
+
+func TestReconcileLibraryInventoryRetainsMissingTombstoneAndClearsOnReappearance(t *testing.T) {
+	repo := &memoryInventoryRepo{snapshot: &model.LibraryInventorySnapshot{Generation: 1, Entries: []model.LibraryInventoryEntry{{
+		Path: "Film/movie.mkv", Scope: InventoryScopeLibrary, Role: string(InventoryVideo), Size: 10, ModTime: 20, Fingerprint: "fp",
+	}}}}
+	firstMissing := time.Unix(1000, 0).UTC()
+	result, err := ReconcileLibraryInventory(context.Background(), repo, "movies", nil, firstMissing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Changes) != 1 || result.Changes[0].Kind != InventoryMissing || len(repo.snapshot.Entries) != 1 || repo.snapshot.Entries[0].MissingSince.IsZero() {
+		t.Fatalf("first missing generation = %#v, snapshot=%#v", result.Changes, repo.snapshot.Entries)
+	}
+	result, err = ReconcileLibraryInventory(context.Background(), repo, "movies", []InventoryEntry{{
+		Path: "Film/movie.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, Size: 10, ModTime: 20,
+	}}, firstMissing.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Changes) != 1 || result.Changes[0].Kind != InventoryChanged || !repo.snapshot.Entries[0].MissingSince.IsZero() {
+		t.Fatalf("reappeared object was not revived cleanly: %#v %#v", result.Changes, repo.snapshot.Entries)
+	}
+}

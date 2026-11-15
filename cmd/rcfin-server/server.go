@@ -577,19 +577,10 @@ func runServer() {
 		log.Printf("initial collection search index build failed: %v", err)
 	}
 	var workers sync.WaitGroup
-	workers.Add(4)
-	go func() { defer workers.Done(); collection.Background(rootCtx) }()
+	workers.Add(1)
 	go func() {
 		defer workers.Done()
-		metadataRefreshLoop(rootCtx, collection, repo, config.Collections, rescanInterval)
-	}()
-	go func() {
-		defer workers.Done()
-		subtitleRefreshLoop(rootCtx, collection, repo, config.Collections, rescanInterval)
-	}()
-	go func() {
-		defer workers.Done()
-		organizationLoop(rootCtx, collection, repo, config.Collections, rescanInterval)
+		libraryAutomationLoop(rootCtx, collection, repo, config)
 	}()
 	if config.Cachedir != "" {
 		workers.Add(1)

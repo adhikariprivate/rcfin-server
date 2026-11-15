@@ -46,3 +46,37 @@ func TestInventoryMovieReadsFolderMovieNFOProviderIDs(t *testing.T) {
 	}
 	t.Fatal("movie video was absent from inventory")
 }
+
+func TestInventoryLibraryCoversLibraryAndInboxWithScope(t *testing.T) {
+	root := t.TempDir()
+	for _, relative := range []string{"Film/movie.mkv", ".Inbox/New/movie.mkv"} {
+		filename := filepath.Join(root, filepath.FromSlash(relative))
+		if err := os.MkdirAll(filepath.Dir(filename), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filename, []byte("video"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	storage, err := rclonestore.New(context.Background(), root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+	inventory, err := InventoryLibrary(context.Background(), &Collection{ID: "movies", Type: CollectionTypeMovies, Storage: storage, InboxPath: ".Inbox"}, ".Inbox")
+	if err != nil {
+		t.Fatalf("InventoryLibrary() error = %v", err)
+	}
+	seen := map[string]string{}
+	for _, entry := range inventory {
+		if entry.Role == InventoryVideo {
+			seen[entry.Path] = entry.Scope
+		}
+	}
+	if seen["Film/movie.mkv"] != InventoryScopeLibrary || seen[".Inbox/New/movie.mkv"] != InventoryScopeInbox {
+		t.Fatalf("video scopes = %#v", seen)
+	}
+	if len(inventory) < 4 {
+		t.Fatalf("unified inventory omitted directory records: %#v", inventory)
+	}
+}

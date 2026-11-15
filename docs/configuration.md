@@ -57,7 +57,7 @@ Use the normal Rclone tooling to create and verify remote sections. RCFin embeds
 | `listen.ip_acl` | Optional comma-separated client IP allow list; empty allows all clients. |
 | `logfile` | `stdout` (default), `stderr`, `none`, or a writable log file path. |
 | `cachedir` | Local artwork resize cache directory. |
-| `rescan_interval` | Positive Go duration for periodic library rescans; default `30m`. |
+| `scan_interval` | Optional positive Go duration default for each library's unified inventory and media-work cycle; default `30m`. |
 | `database.driver` | `sqlite` (default for existing configurations) or `postgres`. |
 | `database.sqlite.filename` | Local SQLite database file path. |
 | `database.postgres.url` | PostgreSQL connection URL. If empty, RCFin reads `RCFIN_POSTGRES_URL` from the environment. |
@@ -72,6 +72,9 @@ Use the normal Rclone tooling to create and verify remote sections. RCFin embeds
 | `collections[].type` | `movies` or `shows`. |
 | `collections[].remote` | Rclone remote path, e.g. `files:HTPC/Movies`. This key is named `remote`, not `directory`. |
 | `collections[].vfs` | Per-collection Rclone VFS options. See the [VFS reference](vfs-options.md). |
+| `collections[].media.scan_interval` | Optional per-library override for the single inventory cycle. Metadata, subtitles, and Inbox do not have independent poll intervals. |
+| `collections[].media.inbox.stable_for` | Quiet period for Inbox transfers when no reliable completion marker is configured; default `10m`. |
+| `collections[].media.inbox.completion_marker` | Optional marker the uploader creates only after the complete item has finished uploading. |
 
 The SQLite database is local. With PostgreSQL selected, durable application records live in PostgreSQL. Artwork resize and Rclone VFS caches remain local and rebuildable with either driver. The media itself is accessed through Rclone. The selected VFS cache mode and limits determine how much local disk can be used for media reads. PostgreSQL starts with its own empty schema; this change does not import existing SQLite data.
 
@@ -84,5 +87,5 @@ For compatibility, existing configs may continue using the compact Jellyfin keys
 - RCFin `v1.0.0` did not install Rclone's file-backed config loader, so custom config files were ignored even with the correct path. Upgrade to a build containing the embedded config loader fix.
 - `remote not found in config`: check that the remote name before `:` matches the INI section name exactly.
 - Log file cannot be opened: select `stdout` or `stderr`, or ensure the RCFin user can create/append the configured file.
-- Library changes appear late: reduce `rescan_interval` and/or `dir_cache_time`; enable `poll_interval` only when the backend supports polling.
+- Library changes appear late: reduce `scan_interval` (globally or for that library) and/or `dir_cache_time`; enable `poll_interval` only when the backend supports polling.
 - Seeks are slow: check backend range-read support and tune the collection's read-chunk and cache settings.
