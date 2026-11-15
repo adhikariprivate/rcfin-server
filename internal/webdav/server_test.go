@@ -21,6 +21,18 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+func TestSeasonDisplayName(t *testing.T) {
+	if got := seasonDisplayName(1); got != "Season 01" {
+		t.Fatalf("season 1 display name = %q", got)
+	}
+	if got := seasonDisplayName(12); got != "Season 12" {
+		t.Fatalf("season 12 display name = %q", got)
+	}
+	if got := seasonDisplayName(0); got != "Specials" {
+		t.Fatalf("season 0 display name = %q", got)
+	}
+}
+
 func TestServerAuthListsGrantedLibraryAndRejectsWrites(t *testing.T) {
 	ctx := context.Background()
 	db, err := sqlite.New(&sqlite.ConfigFile{Filename: filepath.Join(t.TempDir(), "dav.db")})
@@ -88,14 +100,14 @@ func TestServerAuthListsGrantedLibraryAndRejectsWrites(t *testing.T) {
 	if !strings.Contains(response.Body.String(), "Movies") {
 		t.Fatalf("PROPFIND omitted granted library: %s", response.Body.String())
 	}
-	get := httptest.NewRequest(http.MethodGet, "/dav/Movies/All/Film%20(2020)/Film.mkv", nil)
+	get := httptest.NewRequest(http.MethodGet, "/dav/Movies/All/Film%20(2020)/Film%20(2020).mkv", nil)
 	get.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("alice:secret")))
 	getResponse := httptest.NewRecorder()
 	serve.ServeHTTP(getResponse, get)
 	if getResponse.Code != http.StatusOK || getResponse.Body.String() != "database bytes" {
 		t.Fatalf("virtual video GET = %d %q", getResponse.Code, getResponse.Body.String())
 	}
-	ranged := httptest.NewRequest(http.MethodGet, "/dav/Movies/All/Film%20(2020)/Film.mkv", nil)
+	ranged := httptest.NewRequest(http.MethodGet, "/dav/Movies/All/Film%20(2020)/Film%20(2020).mkv", nil)
 	ranged.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("alice:secret")))
 	ranged.Header.Set("Range", "bytes=0-4")
 	rangeResponse := httptest.NewRecorder()

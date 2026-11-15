@@ -155,6 +155,15 @@ func (s *Server) buildTree(ctx context.Context, user *model.User) (*requestTree,
 		if !cfg.Enabled || !canAccess(user, c.ID) {
 			continue
 		}
+		if cfg.TitleFolder == "" {
+			cfg.TitleFolder = "{title} ({year})"
+		}
+		if cfg.FileName == "" {
+			cfg.FileName = "{title} ({year}).{ext}"
+		}
+		if cfg.EpisodeName == "" {
+			cfg.EpisodeName = "{series} - S{season:02}E{episode:02} - {episode_title}.{ext}"
+		}
 		if s.repo != nil {
 			snapshot, err := s.repo.GetLibraryInventory(ctx, c.ID)
 			if err != nil {
@@ -237,11 +246,14 @@ func canAccess(user *model.User, id string) bool {
 
 func (s *Server) addShow(t *requestTree, c collection.Collection, cfg LibraryConfig, view string, parent *node, show *collection.Show) {
 	showName := itemTitle(show)
+	if cfg.TitleFolder != "" {
+		showName = formatName(cfg.TitleFolder, show, show.FileName())
+	}
 	if view == "all" {
 		dir := t.ensureDir(parent, showName)
 		s.addShowSidecars(t, c, cfg, dir, show)
 		for _, season := range show.Seasons {
-			seasonDir := t.ensureDir(dir, season.Name())
+			seasonDir := t.ensureDir(dir, seasonDisplayName(season.Number()))
 			s.addSeasonSidecars(t, c, cfg, seasonDir, &season)
 			for _, ep := range season.Episodes {
 				s.addItem(t, c, cfg, view, seasonDir, &ep, ep.Path(), ep.FileName())
@@ -254,7 +266,7 @@ func (s *Server) addShow(t *requestTree, c collection.Collection, cfg LibraryCon
 		showDir := t.ensureDir(d, showName)
 		s.addShowSidecars(t, c, cfg, showDir, show)
 		for _, season := range show.Seasons {
-			seasonDir := t.ensureDir(showDir, season.Name())
+			seasonDir := t.ensureDir(showDir, seasonDisplayName(season.Number()))
 			s.addSeasonSidecars(t, c, cfg, seasonDir, &season)
 			for _, ep := range season.Episodes {
 				s.addItem(t, c, cfg, view, seasonDir, &ep, ep.Path(), ep.FileName())
@@ -277,10 +289,14 @@ func (s *Server) addItem(t *requestTree, c collection.Collection, cfg LibraryCon
 			base = t.ensureDir(base, value)
 		}
 		folderName := itemTitle(item)
-		if cfg.TitleFolder != "" {
+		_, isEpisode := item.(*collection.Episode)
+		if cfg.TitleFolder != "" && !isEpisode {
 			folderName = formatName(cfg.TitleFolder, item, sourceFile)
 		}
-		dir := t.ensureDir(base, folderName)
+		dir := base
+		if !isEpisode {
+			dir = t.ensureDir(base, folderName)
+		}
 		filename := sourceFile
 		fileFormat := cfg.FileName
 		if _, ok := item.(*collection.Episode); ok && cfg.EpisodeName != "" {
@@ -413,19 +429,39 @@ func uniqueSorted(values []string) []string {
 	return out
 }
 func itemTitle(i collection.Item) string {
-	title := strings.TrimSpace(i.Name())
+	title := strings.TrimSpace(i.Title())
 	if title == "" {
-		title = strings.TrimSpace(i.Title())
+		title = strings.TrimSpace(i.Name())
 	}
 	if title == "" {
 		title = i.FileName()
 	}
-	return safeName(title)
+	return safeName(stripProviderID(title))
+}
+
+// Collection names can contain provider IDs, which are useful internally but
+// should not leak into the user-facing virtual path.
+func stripProviderID(title string) string {
+	for _, marker := range []string{" [tmdbid-", " [tvdbid-", " [imdbid-"} {
+		if index := strings.Index(strings.ToLower(title), marker); index >= 0 && strings.HasSuffix(title, "]") {
+			title = strings.TrimSpace(title[:index])
+			break
+		}
+	}
+	return title
+}
+
+func seasonDisplayName(number int) string {
+	if number == 0 {
+		return "Specials"
+	}
+	return fmt.Sprintf("Season %02d", number)
 }
 func formatName(tpl string, item collection.Item, original string) string {
-	title := strings.TrimSpace(item.Title())
-	if title == "" {
-		title = item.Name()
+	title := itemTitle(item)
+	if item.Year() > 0 && strings.Contains(tpl, "{year}") {
+		yearSuffix := " (" + yearString(item.Year()) + ")"
+		title = strings.TrimSuffix(title, yearSuffix)
 	}
 	resolution := ""
 	if item.VideoHeight() > 0 {
@@ -435,13 +471,16 @@ func formatName(tpl string, item collection.Item, original string) string {
 	if e, ok := item.(*collection.Episode); ok {
 		season = fmt.Sprintf("%02d", e.SeasonNo)
 		episode = fmt.Sprintf("%02d", e.EpisodeNo)
-		series = path.Base(strings.TrimSuffix(e.Path(), "/"))
+		series = stripProviderID(path.Base(strings.TrimSuffix(e.Path(), "/")))
 		if episodeTitle == "" {
 			episodeTitle = e.Name()
 		}
 	}
-	repl := strings.NewReplacer("{episode_title}", episodeTitle, "{series}", series, "{season:02}", season, "{episode:02}", episode, "{title}", title, "{name}", item.Name(), "{year}", yearString(item.Year()), "{ext}", strings.TrimPrefix(path.Ext(original), "."), "{resolution}", resolution)
-	return safeName(repl.Replace(tpl))
+	repl := strings.NewReplacer("{episode_title}", episodeTitle, "{series}", series, "{season:02}", season, "{episode:02}", episode, "{title}", title, "{name}", stripProviderID(item.Name()), "{year}", yearString(item.Year()), "{ext}", strings.TrimPrefix(path.Ext(original), "."), "{resolution}", resolution)
+	formatted := repl.Replace(tpl)
+	formatted = strings.ReplaceAll(formatted, " ()", "")
+	formatted = strings.ReplaceAll(formatted, "..", ".")
+	return safeName(formatted)
 }
 func yearString(y int) string {
 	if y <= 0 {

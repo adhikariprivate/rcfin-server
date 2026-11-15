@@ -59,6 +59,13 @@ original extension where possible. A changed metadata value can change the
 virtual path; the item remains linked to the same catalog identity and current
 storage path.
 
+When templates are omitted, movie and show folders use `{title} ({year})`,
+movie files use `{title} ({year}).{ext}`, and episode files use
+`{series} - S{season:02}E{episode:02} - {episode_title}.{ext}`. Provider ID
+suffixes are removed from display names. Episodes and their NFO files appear
+directly in the season folder. Season folders are labeled `Season 01`,
+`Season 02`, and so on; season zero is labeled `Specials`.
+
 ## Directory layout
 
 The standard views organize each item into its own title folder so a video
