@@ -424,7 +424,6 @@ func inboxItemReady(ctx context.Context, coll *collection.Collection, repo datab
 		BackendID string `json:"backend_id,omitempty"`
 		Size      int64  `json:"size"`
 		ModTime   int64  `json:"mod_time"`
-		IsDir     bool   `json:"is_dir,omitempty"`
 	}
 	var files []itemFile
 	for _, entry := range entries {
@@ -434,15 +433,13 @@ func inboxItemReady(ctx context.Context, coll *collection.Collection, repo datab
 		if entry.Path == source && !entry.IsDir {
 			continue
 		}
-		if opts.CompletionMarker != "" && path.Base(entry.Path) == opts.CompletionMarker {
-			continue
-		}
-		if opts.Inventory != nil {
-			files = append(files, itemFile{Path: entry.Path, BackendID: entry.BackendID, Size: entry.Size, ModTime: entry.ModTime, IsDir: entry.IsDir})
-			continue
-		}
+		// Directory IDs and timestamps are often unstable on remote backends.
+		// Relative file paths already capture tree membership, so readiness is
+		// based on file evidence and ignores mutable parent-directory metadata.
 		if entry.IsDir {
-			files = append(files, itemFile{Path: entry.Path, BackendID: entry.BackendID, Size: entry.Size, ModTime: entry.ModTime, IsDir: true})
+			continue
+		}
+		if opts.CompletionMarker != "" && path.Base(entry.Path) == opts.CompletionMarker {
 			continue
 		}
 		files = append(files, itemFile{Path: entry.Path, BackendID: entry.BackendID, Size: entry.Size, ModTime: entry.ModTime})
@@ -455,7 +452,7 @@ func inboxItemReady(ctx context.Context, coll *collection.Collection, repo datab
 		AlgorithmVersion int        `json:"algorithm_version"`
 		StableFor        int64      `json:"stable_for_ns"`
 		Files            []itemFile `json:"files"`
-	}{AlgorithmVersion: 2, StableFor: int64(stableFor), Files: files})
+	}{AlgorithmVersion: 3, StableFor: int64(stableFor), Files: files})
 	signature := string(signatureBytes)
 	const action = "inbox_stability"
 	existing, err := repo.GetMediaOperation(ctx, coll.ID, source, action)

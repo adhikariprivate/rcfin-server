@@ -163,3 +163,28 @@ func TestInboxCompletionMarkerAndReadinessSurviveRepositoryRestart(t *testing.T)
 		t.Fatal("unsafe completion marker path was accepted")
 	}
 }
+
+func TestInboxReadinessIgnoresUnstableDirectoryMetadata(t *testing.T) {
+	ctx := context.Background()
+	repo, err := sqlite.New(&sqlite.ConfigFile{Filename: filepath.Join(t.TempDir(), "rcfin.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	coll := &collection.Collection{ID: "movies", Type: collection.CollectionTypeMovies, InboxPath: ".Inbox"}
+	options := Options{StableFor: 20 * time.Millisecond, Inventory: []collection.InventoryEntry{
+		{Path: ".Inbox/Film", Scope: collection.InventoryScopeInbox, IsDir: true, BackendID: "dir-old", ModTime: 100},
+		{Path: ".Inbox/Film/Film.mkv", Scope: collection.InventoryScopeInbox, Role: collection.InventoryVideo, Size: 100, ModTime: 200, BackendID: "file-1"},
+	}}
+	ready, err := InboxItemReady(ctx, coll, repo, ".Inbox/Film", options)
+	if err != nil || ready {
+		t.Fatalf("first observation = ready %v, err %v; want pending", ready, err)
+	}
+	time.Sleep(25 * time.Millisecond)
+	options.Inventory[0].BackendID = "dir-new"
+	options.Inventory[0].ModTime = 300
+	ready, err = InboxItemReady(ctx, coll, repo, ".Inbox/Film", options)
+	if err != nil || !ready {
+		t.Fatalf("directory metadata change reset stable file evidence: ready=%v err=%v", ready, err)
+	}
+}
