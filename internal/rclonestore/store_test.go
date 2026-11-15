@@ -66,6 +66,22 @@ func TestListRecursiveFallsBackWhenBackendDoesNotSupportIt(t *testing.T) {
 	}
 }
 
+func TestListRecursiveRejectsUnsafePathsInsteadOfCommittingPartialInventory(t *testing.T) {
+	library, err := New(context.Background(), t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer library.Close()
+	features := *library.backend.Features()
+	features.ListR = func(ctx context.Context, _ string, callback fs.ListRCallback) error {
+		return callback(fs.DirEntries{fs.NewDir("../outside", time.Unix(1, 0))})
+	}
+	library.backend = recursiveFsWrapper{Fs: library.backend, features: &features}
+	if _, supported, err := library.ListRecursive(context.Background()); err == nil || !supported {
+		t.Fatalf("ListRecursive() = (supported %v, err %v), want supported listing failure", supported, err)
+	}
+}
+
 func TestConfigureLoadsNamedRemoteFromConfigFile(t *testing.T) {
 	tempDir := t.TempDir()
 	remoteRoot := filepath.Join(tempDir, "media")

@@ -1017,9 +1017,15 @@ func (l *Library) ListRecursive(ctx context.Context) ([]RecursiveEntry, bool, er
 	var entries []RecursiveEntry
 	err := features.ListR(ctx, "", func(batch fs.DirEntries) error {
 		for _, item := range batch {
-			remote := strings.Trim(strings.TrimSpace(item.Remote()), "/")
-			if remote == "" || path.Clean(remote) != remote || path.IsAbs(remote) || strings.HasPrefix(remote, "../") {
+			remote := strings.TrimSpace(item.Remote())
+			// Backends may include the root itself in ListR; it is not an
+			// inventory child. Any other malformed path makes the snapshot
+			// incomplete, so fail rather than silently turning it into a deletion.
+			if remote == "" || remote == "." {
 				continue
+			}
+			if path.Clean(remote) != remote || path.IsAbs(remote) || strings.HasPrefix(remote, "../") || strings.ContainsAny(remote, "\\\x00") {
+				return fmt.Errorf("Rclone recursive listing returned unsafe relative path %q", remote)
 			}
 			entry := RecursiveEntry{Path: remote, Size: item.Size(), ModTime: item.ModTime(ctx)}
 			if directory, ok := item.(fs.Directory); ok {
