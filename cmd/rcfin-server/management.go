@@ -72,13 +72,19 @@ func runManagementCommand(configPath string, args []string) error {
 	ctx := context.Background()
 	switch args[0] {
 	case "library":
-		if len(args) != 2 || args[1] != "list" {
-			return errors.New("usage: rcfin library list")
+		if len(args) == 2 && args[1] == "list" {
+			for _, library := range config.Collections {
+				fmt.Printf("%-20s %-8s %s\n", library.ID, library.Type, library.Name)
+			}
+			return nil
 		}
-		for _, library := range config.Collections {
-			fmt.Printf("%-20s %-8s %s\n", library.ID, library.Type, library.Name)
+		if len(args) >= 2 && args[1] == "scan" {
+			return runLibraryScanCommand(ctx, repo, config, args[2:])
 		}
-		return nil
+		if len(args) >= 2 && args[1] == "status" {
+			return runLibraryStatusCommand(ctx, repo, config.Collections, args[2:])
+		}
+		return errors.New("usage: rcfin library <list|scan LIBRARY_ID|status LIBRARY_ID>")
 	case "user":
 		return runUserCommand(ctx, repo, config.Collections, args[1:])
 	case "media":
@@ -86,6 +92,63 @@ func runManagementCommand(configPath string, args []string) error {
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func runLibraryScanCommand(ctx context.Context, repo database.Repository, config configFile, args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: rcfin library scan LIBRARY_ID")
+	}
+	libraryID := args[0]
+	var selected *collectionConfig
+	for i := range config.Collections {
+		if config.Collections[i].ID == libraryID {
+			selected = &config.Collections[i]
+			break
+		}
+	}
+	if selected == nil {
+		return fmt.Errorf("unknown library ID %q", libraryID)
+	}
+	if err := rclonestore.Configure(config.Rclone.Config, config.Rclone.CacheDir); err != nil {
+		return fmt.Errorf("configure Rclone: %w", err)
+	}
+	storage, err := rclonestore.New(ctx, selected.Remote, selected.VFS)
+	if err != nil {
+		return fmt.Errorf("open library remote: %w", err)
+	}
+	defer storage.Close()
+	inbox := selected.Media.InboxPath
+	if inbox == "" {
+		inbox = ".Inbox"
+	}
+	coll := &collection.Collection{ID: selected.ID, Name: selected.Name, Type: collection.CollectionType(selected.Type), Remote: selected.Remote, Storage: storage, InboxPath: inbox}
+	entries, err := collection.InventoryLibrary(ctx, coll, inbox)
+	if err != nil {
+		return fmt.Errorf("inventory library: %w", err)
+	}
+	reconciliation, err := collection.ReconcileLibraryInventory(ctx, repo, selected.ID, entries, time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("reconcile library inventory: %w", err)
+	}
+	return json.NewEncoder(os.Stdout).Encode(reconciliation)
+}
+
+func runLibraryStatusCommand(ctx context.Context, repo database.Repository, libraries []collectionConfig, args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: rcfin library status LIBRARY_ID")
+	}
+	libraryID := args[0]
+	if !configuredLibrary(libraries, libraryID) {
+		return fmt.Errorf("unknown library ID %q", libraryID)
+	}
+	snapshot, err := repo.GetLibraryInventory(ctx, libraryID)
+	if err != nil {
+		return fmt.Errorf("read library inventory status: %w", err)
+	}
+	if snapshot == nil {
+		return fmt.Errorf("library %q has no completed inventory; run `rcfin library scan %s`", libraryID, libraryID)
+	}
+	return json.NewEncoder(os.Stdout).Encode(snapshot)
 }
 
 func runMediaCommand(ctx context.Context, repo database.Repository, libraries []collectionConfig, args []string) error {
@@ -261,12 +324,20 @@ func runMediaPlanCommand(ctx context.Context, config configFile, args []string) 
 			folderFormat = policy.SeriesFormat
 		}
 		stableFor := 10 * time.Minute
-		if configured := strings.TrimSpace(policy.StableFor); configured != "" {
+		stableConfig := selected.Media.Inbox.StableFor
+		if strings.TrimSpace(stableConfig) == "" {
+			stableConfig = policy.StableFor
+		}
+		if configured := strings.TrimSpace(stableConfig); configured != "" {
 			if parsed, parseErr := time.ParseDuration(configured); parseErr == nil {
 				stableFor = parsed
 			}
 		}
-		opts := organization.Options{IncludeProviderID: policy.IncludeProviderID, EnableDiscFolders: policy.DiscFolders, FlattenGroupingDirectories: !policy.PreserveGroupingDirectories, MinimumConfidence: policy.MinimumConfidence, FolderFormat: folderFormat, FileFormat: policy.FileFormat, SeasonFormat: policy.SeasonFormat, EpisodeFormat: policy.EpisodeFormat, Language: metadataPolicy.Language, FallbackLanguages: policy.EpisodeFallbackLanguages, AllowedExtensions: policy.AllowedExtensions, StableFor: stableFor, CompletionMarker: policy.CompletionMarker}
+		completionMarker := selected.Media.Inbox.CompletionMarker
+		if strings.TrimSpace(completionMarker) == "" {
+			completionMarker = policy.CompletionMarker
+		}
+		opts := organization.Options{IncludeProviderID: policy.IncludeProviderID, EnableDiscFolders: policy.DiscFolders, FlattenGroupingDirectories: !policy.PreserveGroupingDirectories, MinimumConfidence: policy.MinimumConfidence, FolderFormat: folderFormat, FileFormat: policy.FileFormat, SeasonFormat: policy.SeasonFormat, EpisodeFormat: policy.EpisodeFormat, Language: metadataPolicy.Language, FallbackLanguages: policy.EpisodeFallbackLanguages, AllowedExtensions: policy.AllowedExtensions, StableFor: stableFor, CompletionMarker: completionMarker}
 		var plan organization.Report
 		var planErr error
 		if selected.Type == "shows" {

@@ -19,7 +19,7 @@ logfile: stdout
 # These paths must be writable by the account running RCFin. They are local;
 # media itself is read from the configured Rclone remotes below.
 cachedir: /var/cache/rcfin/images
-rescan_interval: 30m
+scan_interval: 30m # Default cadence for the complete per-library pipeline.
 
 database:
   # Supported drivers: sqlite (default) and postgres.
@@ -52,8 +52,13 @@ collections:
     # The remote name must match a section in rclone.config above.
     remote: files:HTPC/Movies
     media:
+      scan_interval: 30m # One inventory cadence for Inbox, metadata, and subtitles.
       # Explicit relative intake path. It is excluded from the playable scan.
       inbox_path: .Inbox
+      inbox:
+        stable_for: 10m
+        # Optional; the uploader must create this only after all files finish.
+        # completion_marker: .rcfin-complete
       # Shared concurrency limit across metadata, subtitles, and organization.
       # Zero or omission defaults to one; accepted range is 0..32.
       max_parallel_jobs: 1
@@ -94,7 +99,6 @@ collections:
         fetch_nfo: true
         overwrite_existing: false
         overwrite_artwork: false
-        refresh_existing_after: 24h
       subtitles:
         enabled: false
         provider: opensubtitles
@@ -126,7 +130,10 @@ collections:
     type: shows
     remote: files:HTPC/TV
     media:
+      scan_interval: 30m
       inbox_path: .Inbox
+      inbox:
+        stable_for: 10m
       max_parallel_jobs: 1
       normalize_existing:
         enabled: false
@@ -163,7 +170,6 @@ collections:
         fetch_nfo: true
         overwrite_existing: false
         overwrite_artwork: false
-        refresh_existing_after: 24h
       subtitles:
         enabled: false
         provider: opensubtitles

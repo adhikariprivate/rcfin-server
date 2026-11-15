@@ -58,6 +58,7 @@ type configFile struct {
 		Postgres postgres.Config   `mapstructure:"postgres" yaml:"postgres"`
 	} `yaml:"database"`
 	Logfile        string
+	ScanInterval   string `mapstructure:"scan_interval"`
 	RescanInterval string `mapstructure:"rescan_interval"`
 	Rclone         struct {
 		Config   string `mapstructure:"config"`
@@ -84,8 +85,13 @@ type collectionConfig struct {
 // Media options are intentionally opt-in. Organization stays disabled and
 // dry-run stays enabled unless the operator explicitly changes both settings.
 type mediaConfig struct {
-	InboxPath         string `mapstructure:"inbox_path"`
-	MaxParallelJobs   int    `mapstructure:"max_parallel_jobs"`
+	ScanInterval string `mapstructure:"scan_interval"`
+	InboxPath    string `mapstructure:"inbox_path"`
+	Inbox        struct {
+		StableFor        string `mapstructure:"stable_for"`
+		CompletionMarker string `mapstructure:"completion_marker"`
+	} `mapstructure:"inbox"`
+	MaxParallelJobs   int `mapstructure:"max_parallel_jobs"`
 	NormalizeExisting struct {
 		Enabled bool `mapstructure:"enabled"`
 		DryRun  bool `mapstructure:"dry_run"`
@@ -235,6 +241,21 @@ func validateCollections(collections []collectionConfig) error {
 		}
 		if c.Media.MaxParallelJobs < 0 || c.Media.MaxParallelJobs > 32 {
 			return fmt.Errorf("collection %q media.max_parallel_jobs must be between 0 and 32 (0 uses the default of 1)", c.ID)
+		}
+		if scanInterval := strings.TrimSpace(c.Media.ScanInterval); scanInterval != "" {
+			parsed, err := time.ParseDuration(scanInterval)
+			if err != nil || parsed <= 0 {
+				return fmt.Errorf("collection %q has invalid media.scan_interval %q", c.ID, scanInterval)
+			}
+		}
+		if stableFor := strings.TrimSpace(c.Media.Inbox.StableFor); stableFor != "" {
+			parsed, err := time.ParseDuration(stableFor)
+			if err != nil || parsed <= 0 {
+				return fmt.Errorf("collection %q has invalid media.inbox.stable_for %q", c.ID, stableFor)
+			}
+		}
+		if marker := strings.TrimSpace(c.Media.Inbox.CompletionMarker); marker != "" && (path.Base(marker) != marker || marker == "." || marker == ".." || strings.Contains(marker, "\\")) {
+			return fmt.Errorf("collection %q media.inbox.completion_marker must be a filename within the Inbox item", c.ID)
 		}
 		if c.Type != "movies" && c.Type != "shows" {
 			return fmt.Errorf("collection %q has unsupported type %q", c.ID, c.Type)
@@ -487,10 +508,14 @@ func runServer() {
 		log.Fatalf("rclone configuration: %v", err)
 	}
 	rescanInterval := 30 * time.Minute
-	if config.RescanInterval != "" {
-		rescanInterval, err = time.ParseDuration(config.RescanInterval)
+	configuredScanInterval := config.ScanInterval
+	if configuredScanInterval == "" {
+		configuredScanInterval = config.RescanInterval // legacy global spelling
+	}
+	if configuredScanInterval != "" {
+		rescanInterval, err = time.ParseDuration(configuredScanInterval)
 		if err != nil || rescanInterval <= 0 {
-			log.Fatalf("invalid rescaninterval %q: expected a positive duration", config.RescanInterval)
+			log.Fatalf("invalid scan_interval %q: expected a positive duration", configuredScanInterval)
 		}
 	}
 
@@ -838,7 +863,11 @@ func organizationLoop(ctx context.Context, repo *collection.CollectionRepo, db d
 				}
 			}
 			stableFor := 10 * time.Minute
-			if configured := strings.TrimSpace(policy.StableFor); configured != "" {
+			stableConfig := library.Media.Inbox.StableFor
+			if strings.TrimSpace(stableConfig) == "" {
+				stableConfig = policy.StableFor // accept the previous config location
+			}
+			if configured := strings.TrimSpace(stableConfig); configured != "" {
 				parsed, parseErr := time.ParseDuration(configured)
 				if parseErr != nil || parsed < 0 {
 					log.Printf("organization for collection %q skipped: invalid stable_for duration", library.ID)
@@ -865,7 +894,11 @@ func organizationLoop(ctx context.Context, repo *collection.CollectionRepo, db d
 							continue
 						}
 						rootChecked[dir] = true
-						ready, readyErr := organization.InboxItemReady(ctx, coll, db, dir, organization.Options{EnableDiscFolders: true, StableFor: stableFor, CompletionMarker: policy.CompletionMarker})
+						completionMarker := library.Media.Inbox.CompletionMarker
+						if strings.TrimSpace(completionMarker) == "" {
+							completionMarker = policy.CompletionMarker
+						}
+						ready, readyErr := organization.InboxItemReady(ctx, coll, db, dir, organization.Options{EnableDiscFolders: true, StableFor: stableFor, CompletionMarker: completionMarker})
 						if readyErr != nil {
 							log.Printf("Inbox stability check for collection %q item %q failed: %v", library.ID, dir, readyErr)
 							continue
@@ -954,7 +987,11 @@ func organizationLoop(ctx context.Context, repo *collection.CollectionRepo, db d
 			if library.Type == "shows" && policy.SeriesFormat != "" {
 				folderFormat = policy.SeriesFormat
 			}
-			organizationOptions := organization.Options{IncludeProviderID: policy.IncludeProviderID, EnableDiscFolders: policy.DiscFolders, FlattenGroupingDirectories: !policy.PreserveGroupingDirectories, MinimumConfidence: policy.MinimumConfidence, FolderFormat: folderFormat, FileFormat: policy.FileFormat, SeasonFormat: policy.SeasonFormat, EpisodeFormat: policy.EpisodeFormat, Language: library.Media.Metadata.Language, FallbackLanguages: policy.EpisodeFallbackLanguages, AllowedExtensions: policy.AllowedExtensions, StableFor: stableFor, CompletionMarker: policy.CompletionMarker}
+			completionMarker := library.Media.Inbox.CompletionMarker
+			if strings.TrimSpace(completionMarker) == "" {
+				completionMarker = policy.CompletionMarker
+			}
+			organizationOptions := organization.Options{IncludeProviderID: policy.IncludeProviderID, EnableDiscFolders: policy.DiscFolders, FlattenGroupingDirectories: !policy.PreserveGroupingDirectories, MinimumConfidence: policy.MinimumConfidence, FolderFormat: folderFormat, FileFormat: policy.FileFormat, SeasonFormat: policy.SeasonFormat, EpisodeFormat: policy.EpisodeFormat, Language: library.Media.Metadata.Language, FallbackLanguages: policy.EpisodeFallbackLanguages, AllowedExtensions: policy.AllowedExtensions, StableFor: stableFor, CompletionMarker: completionMarker}
 			var result organization.Report
 			if policy.Enabled && client != nil {
 				err = perLibraryMediaJobs.run(ctx, library.ID, library.Media.MaxParallelJobs, func() error {
