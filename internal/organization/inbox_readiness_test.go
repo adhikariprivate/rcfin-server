@@ -183,8 +183,9 @@ func TestInboxReadinessIgnoresUnstableDirectoryMetadata(t *testing.T) {
 	time.Sleep(25 * time.Millisecond)
 	options.Inventory[0].BackendID = "dir-new"
 	options.Inventory[0].ModTime = 300
+	options.Inventory[1].BackendID = "file-new"
 	ready, err = InboxItemReady(ctx, coll, repo, ".Inbox/Film", options)
 	if err != nil || !ready {
-		t.Fatalf("directory metadata change reset stable file evidence: ready=%v err=%v", ready, err)
+		t.Fatalf("unstable backend IDs or directory metadata reset stable file evidence: ready=%v err=%v", ready, err)
 	}
 }

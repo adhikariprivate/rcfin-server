@@ -2,7 +2,10 @@ package collection
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -93,6 +96,46 @@ func TestReconcilePersistsListingAndBackendIDEvidence(t *testing.T) {
 	}
 	if repo.snapshot.ListingMode != result.ListingMode || repo.snapshot.BackendIDsObserved != 1 {
 		t.Fatalf("scan evidence was not persisted: %#v", repo.snapshot)
+	}
+}
+
+func TestReconcileMigratesLegacyBackendIDFingerprintWithoutFalseChange(t *testing.T) {
+	plain := fmt.Sprintf("%t\x00%s\x00%s\x00%s\x00%d\x00%d", false, InventoryScopeLibrary, InventoryVideo, "object-old", 100, 20)
+	legacyHash := sha256.Sum256([]byte(plain))
+	repo := &memoryInventoryRepo{snapshot: &model.LibraryInventorySnapshot{
+		Generation: 4,
+		Entries: []model.LibraryInventoryEntry{{
+			Path: "Film/movie.mkv", Scope: InventoryScopeLibrary, Role: string(InventoryVideo),
+			BackendID: "object-old", Size: 100, ModTime: 20, Fingerprint: hex.EncodeToString(legacyHash[:]),
+		}},
+	}}
+	result, err := ReconcileLibraryInventory(context.Background(), repo, "movies", []InventoryEntry{{
+		Path: "Film/movie.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo,
+		BackendID: "object-new", Size: 100, ModTime: 20,
+	}}, time.Unix(500, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Changes) != 1 || result.Changes[0].Kind != InventoryUnchanged {
+		t.Fatalf("backend-ID-only change classified as %#v, want unchanged", result.Changes)
+	}
+	if repo.snapshot.Entries[0].BackendID != "object-new" || repo.snapshot.Entries[0].Fingerprint != persistedInventoryFingerprint(repo.snapshot.Entries[0]) {
+		t.Fatalf("catalog did not retain latest diagnostic ID and migrate fingerprint: %#v", repo.snapshot.Entries[0])
+	}
+}
+
+func TestAdoptInventoryMoveAcceptsEqualAttributesWithUnstableBackendID(t *testing.T) {
+	now := time.Unix(500, 0)
+	old := persistedInventoryEntry(InventoryEntry{Path: "Old/movie.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, BackendID: "object-old", Size: 100, ModTime: 20})
+	old.MissingSince = &now
+	old.Identity = "tmdb=42"
+	current := persistedInventoryEntry(InventoryEntry{Path: "New/movie.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, BackendID: "object-new", Size: 100, ModTime: 20})
+	snapshot := &model.LibraryInventorySnapshot{CollectionID: "movies", Generation: 5, Entries: []model.LibraryInventoryEntry{old, current}}
+	if err := AdoptInventoryMove(snapshot, old.Path, current.Path); err != nil {
+		t.Fatalf("AdoptInventoryMove() rejected matching file evidence: %v", err)
+	}
+	if len(snapshot.Entries) != 1 || snapshot.Entries[0].Path != current.Path || snapshot.Entries[0].Identity != "tmdb=42" {
+		t.Fatalf("move adoption did not carry media identity: %#v", snapshot.Entries)
 	}
 }
 

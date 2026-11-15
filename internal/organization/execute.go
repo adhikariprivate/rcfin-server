@@ -420,10 +420,9 @@ func inboxItemReady(ctx context.Context, coll *collection.Collection, repo datab
 		return false, err
 	}
 	type itemFile struct {
-		Path      string `json:"path"`
-		BackendID string `json:"backend_id,omitempty"`
-		Size      int64  `json:"size"`
-		ModTime   int64  `json:"mod_time"`
+		Path    string `json:"path"`
+		Size    int64  `json:"size"`
+		ModTime int64  `json:"mod_time"`
 	}
 	var files []itemFile
 	for _, entry := range entries {
@@ -442,7 +441,7 @@ func inboxItemReady(ctx context.Context, coll *collection.Collection, repo datab
 		if opts.CompletionMarker != "" && path.Base(entry.Path) == opts.CompletionMarker {
 			continue
 		}
-		files = append(files, itemFile{Path: entry.Path, BackendID: entry.BackendID, Size: entry.Size, ModTime: entry.ModTime})
+		files = append(files, itemFile{Path: entry.Path, Size: entry.Size, ModTime: entry.ModTime})
 	}
 	if len(files) == 0 {
 		return false, nil
@@ -452,7 +451,7 @@ func inboxItemReady(ctx context.Context, coll *collection.Collection, repo datab
 		AlgorithmVersion int        `json:"algorithm_version"`
 		StableFor        int64      `json:"stable_for_ns"`
 		Files            []itemFile `json:"files"`
-	}{AlgorithmVersion: 3, StableFor: int64(stableFor), Files: files})
+	}{AlgorithmVersion: 4, StableFor: int64(stableFor), Files: files})
 	signature := string(signatureBytes)
 	const action = "inbox_stability"
 	existing, err := repo.GetMediaOperation(ctx, coll.ID, source, action)

@@ -89,6 +89,13 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 	nextGeneration := int64(1)
 	if previous != nil {
 		nextGeneration = previous.Generation + 1
+		// Normalize old catalog fingerprints to the current evidence policy.
+		// Earlier versions included backend IDs even though Rclone does not
+		// guarantee that every backend returns stable IDs across listings.
+		for i := range previous.Entries {
+			previous.Entries[i].Fingerprint = persistedInventoryFingerprint(previous.Entries[i])
+		}
+		populateTreeFingerprints(previous.Entries)
 		for _, entry := range previous.Entries {
 			oldByPath[entry.Path] = entry
 		}
@@ -371,9 +378,17 @@ func persistedInventoryEntry(entry InventoryEntry) model.LibraryInventoryEntry {
 	}
 	// Provider IDs and title/year may change when RCFin writes an NFO. They are
 	// retained as rename evidence but excluded from the media fingerprint.
-	plain := fmt.Sprintf("%t\x00%s\x00%s\x00%s\x00%d\x00%d", entry.IsDir, entry.Scope, entry.Role, entry.BackendID, entry.Size, entry.ModTime)
+	persisted := model.LibraryInventoryEntry{Path: entry.Path, Scope: entry.Scope, Role: string(entry.Role), BackendID: entry.BackendID, Size: entry.Size, ModTime: entry.ModTime, IsDir: entry.IsDir, Identity: identity}
+	persisted.Fingerprint = persistedInventoryFingerprint(persisted)
+	return persisted
+}
+
+func persistedInventoryFingerprint(entry model.LibraryInventoryEntry) string {
+	// Backend IDs remain in the catalog for diagnostics, but are not used as
+	// identity evidence unless a backend-specific stability contract exists.
+	plain := fmt.Sprintf("%t\x00%s\x00%s\x00%d\x00%d", entry.IsDir, entry.Scope, entry.Role, entry.Size, entry.ModTime)
 	hash := sha256.Sum256([]byte(plain))
-	return model.LibraryInventoryEntry{Path: entry.Path, Scope: entry.Scope, Role: string(entry.Role), BackendID: entry.BackendID, Size: entry.Size, ModTime: entry.ModTime, IsDir: entry.IsDir, Fingerprint: hex.EncodeToString(hash[:]), Identity: identity}
+	return hex.EncodeToString(hash[:])
 }
 
 func populateTreeFingerprints(entries []model.LibraryInventoryEntry) {
