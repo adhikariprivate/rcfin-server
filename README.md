@@ -45,16 +45,36 @@ Each library can have an excluded `.Inbox` path for new or restaged media. RCFin
 
 Organization is disabled by default and starts in dry-run mode. Ambiguous matches, unrecognized files, incomplete uploads, and destination conflicts are left for review. Existing library items are not moved by routine metadata or subtitle refresh. See [Media layout and automation](docs/media-layout.md) for Inbox setup, supported layouts, safety controls, and CLI previews.
 
-### Automatic metadata and subtitle refresh
+### One inventory cycle for metadata and subtitles
 
-Metadata and subtitle refresh are independent per-library settings. When enabled, RCFin checks existing library items during its refresh cycle and can write missing NFO and artwork sidecars or download configured external subtitles. Existing NFO fields, artwork, and subtitles are protected by default. Inbox items are enriched separately from the normal library scan.
+Each library has one polling interval for the complete background pipeline. RCFin lists the library and `.Inbox` together, reconciles the result with its saved inventory, waits for Inbox transfers to settle, provisions ready Inbox items, then runs eligible metadata before subtitles from that same inventory. Metadata and subtitle stages do not start their own polling scans. Unchanged existing items are left alone; provider work is reserved for new or changed items, relevant processing algorithm upgrades, and explicit CLI refreshes. Existing NFOs, artwork, and subtitles are preserved unless an administrator requests stage-specific replacement.
+
+Inbox readiness uses a completion marker written after upload completion, when configured, or a durable quiet period based on stable file attributes. A changing or newly arriving file resets the quiet period. Organization remains disabled by default and uncertain layouts or collisions stay available for CLI review.
+
+Metadata and artwork use TMDb. Subtitle search and downloads use OpenSubtitles.com. Provider credentials are supplied through environment variables or an optional local `.env` file. See [provider configuration and media automation](docs/media-layout.md#library-inventory-metadata-subtitles-and-intake), [configuration](docs/configuration.md), and [`rcfin.example.yaml`](rcfin.example.yaml).
+
+### CLI library administration
+
+Administrative media actions run through the server CLI; there is no admin API or web UI for these workflows. Common commands:
+
+```sh
+./rcfin library scan movies [--full]
+./rcfin library status movies [--item 'Movie (2024)']
+./rcfin library inbox status movies
+./rcfin library refresh metadata movies --item 'Movie (2024)'
+./rcfin library refresh subtitles movies --item 'Movie (2024)' --language en
+./rcfin library refresh all movies --item 'Movie (2024)'
+./rcfin library organize plan movies --item '.Inbox/Movie (2024)'
+./rcfin library organize apply movies --item '.Inbox/Movie (2024)' --yes
+./rcfin library retry movies --job JOB_ID
+```
+
+`scan` reconciles inventory and does not imply provider refresh. A refresh without replacement fills missing configured outputs while preserving files already present. Use the stage-specific `--replace` options only after reviewing the target and report. See [Media layout and automation](docs/media-layout.md) for full command behavior and safety requirements.
 
 Current providers:
 
 - **Metadata and artwork:** TMDb.
 - **Subtitles:** OpenSubtitles.com.
-
-Provider credentials are supplied through environment variables or an optional local `.env` file. See [provider configuration and media automation](docs/media-layout.md#library-inventory-metadata-subtitles-and-intake) and [`rcfin.example.yaml`](rcfin.example.yaml). Provider terms, quotas, and API credentials apply.
 
 ### Jellyfin-compatible playback
 

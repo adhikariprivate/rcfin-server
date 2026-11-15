@@ -166,21 +166,23 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 	}
 
 	changedLibraryPaths := eligibleChangedVideoPaths(reconciliation.Changes, collection.InventoryScopeLibrary)
-	if containsString(reconciliation.AlgorithmChanges, "metadata") || containsString(reconciliation.AlgorithmChanges, "subtitles") {
-		changedLibraryPaths = appendUniquePaths(changedLibraryPaths, allVideoPaths(inventory, collection.InventoryScopeLibrary)...)
-	}
+	metadataAlgorithmChanged := containsString(reconciliation.AlgorithmChanges, "metadata")
+	subtitleAlgorithmChanged := containsString(reconciliation.AlgorithmChanges, "subtitles")
 	readyInboxPaths, err := readyInboxVideoPaths(ctx, coll, db, library, inventory)
 	if err != nil {
 		log.Printf("Inbox readiness for %q deferred: %v", library.ID, err)
 	}
-	pendingLibraryPaths, err := pendingMediaPaths(ctx, db, library.ID, inventory, collection.InventoryScopeLibrary)
+	pendingMetadataPaths, err := pendingMediaPaths(ctx, db, library.ID, inventory, collection.InventoryScopeLibrary, "metadata")
 	if err != nil {
-		return fmt.Errorf("inspect pending media work: %w", err)
+		return fmt.Errorf("inspect pending metadata work: %w", err)
 	}
-	changedLibraryPaths = appendUniquePaths(changedLibraryPaths, pendingLibraryPaths...)
-
+	pendingSubtitlePaths, err := pendingMediaPaths(ctx, db, library.ID, inventory, collection.InventoryScopeLibrary, "subtitles")
+	if err != nil {
+		return fmt.Errorf("inspect pending subtitle work: %w", err)
+	}
+	metadataCandidates := stageWorkPaths(changedLibraryPaths, pendingMetadataPaths, inventory, collection.InventoryScopeLibrary, metadataAlgorithmChanged)
 	var tmdb *provider.TMDb
-	needsTMDb := organizationPolicy.Enabled || metadataEnabled && hasEligiblePaths(changedLibraryPaths, readyInboxPaths)
+	needsTMDb := organizationPolicy.Enabled || metadataEnabled && hasEligiblePaths(metadataCandidates, readyInboxPaths)
 	if needsTMDb {
 		keyEnv := strings.TrimSpace(metadataPolicy.APIKeyEnv)
 		if keyEnv == "" {
@@ -257,19 +259,20 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 				return fmt.Errorf("refresh inventory after Inbox organization: %w", err)
 			}
 			changedLibraryPaths = appendUniquePaths(changedLibraryPaths, eligibleChangedVideoPaths(reconciliation.Changes, collection.InventoryScopeLibrary)...)
-			if containsString(reconciliation.AlgorithmChanges, "metadata") || containsString(reconciliation.AlgorithmChanges, "subtitles") {
-				changedLibraryPaths = appendUniquePaths(changedLibraryPaths, allVideoPaths(inventory, collection.InventoryScopeLibrary)...)
-			}
+			metadataAlgorithmChanged = metadataAlgorithmChanged || containsString(reconciliation.AlgorithmChanges, "metadata")
+			subtitleAlgorithmChanged = subtitleAlgorithmChanged || containsString(reconciliation.AlgorithmChanges, "subtitles")
 			readyInboxPaths = relocateReadyPaths(readyInboxPaths, orgReport)
 		}
 	}
 
-	libraryPaths := append([]string(nil), changedLibraryPaths...)
+	metadataLibraryPaths := stageWorkPaths(changedLibraryPaths, pendingMetadataPaths, inventory, collection.InventoryScopeLibrary, metadataAlgorithmChanged)
+	subtitleLibraryPaths := stageWorkPaths(changedLibraryPaths, pendingSubtitlePaths, inventory, collection.InventoryScopeLibrary, subtitleAlgorithmChanged)
 	// A confirmed Inbox promotion is a path move, not new media. Carry the
 	// original eligible work over to its final path without repeating detection.
 	for _, pathBefore := range readyInboxPaths {
 		if entryIsVideoAtPath(inventory, pathBefore) && entryScopeAtPath(inventory, pathBefore) == collection.InventoryScopeLibrary {
-			libraryPaths = appendUnique(libraryPaths, pathBefore)
+			metadataLibraryPaths = appendUnique(metadataLibraryPaths, pathBefore)
+			subtitleLibraryPaths = appendUnique(subtitleLibraryPaths, pathBefore)
 		}
 	}
 	inboxPaths := make([]string, 0)
@@ -282,9 +285,9 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 	var metadataReport metadatarefresh.Report
 	metadataReport.CollectionID = library.ID
 	if metadataEnabled && tmdb != nil {
-		if len(libraryPaths) > 0 {
+		if len(metadataLibraryPaths) > 0 {
 			var stageReport metadatarefresh.Report
-			stageReport, err = runMetadataForPaths(ctx, collections, db, coll, library, inventory, libraryPaths, false, tmdb)
+			stageReport, err = runMetadataForPaths(ctx, collections, db, coll, library, inventory, metadataLibraryPaths, false, tmdb)
 			metadataReport.Items = append(metadataReport.Items, stageReport.Items...)
 			if err != nil {
 				log.Printf("metadata refresh for collection %q failed: %v", library.ID, err)
@@ -308,14 +311,14 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 				}
 			}
 		}
-	} else if metadataEnabled && hasEligiblePaths(libraryPaths, inboxPaths) {
+	} else if metadataEnabled && hasEligiblePaths(metadataLibraryPaths, inboxPaths) {
 		retryAt := time.Now().Add(scanInterval)
-		if err := queueDeferredMetadataOperations(ctx, db, library.ID, inventory, coll.Type, appendUniquePaths(append([]string(nil), libraryPaths...), inboxPaths...), retryAt, "required metadata provider credentials are unavailable"); err != nil {
+		if err := queueDeferredMetadataOperations(ctx, db, library.ID, inventory, coll.Type, appendUniquePaths(append([]string(nil), metadataLibraryPaths...), inboxPaths...), retryAt, "required metadata provider credentials are unavailable"); err != nil {
 			return fmt.Errorf("journal deferred metadata work: %w", err)
 		}
 	}
 
-	if subtitlesEnabled && hasEligiblePaths(libraryPaths, inboxPaths) {
+	if subtitlesEnabled && hasEligiblePaths(subtitleLibraryPaths, inboxPaths) {
 		keyEnv := strings.TrimSpace(subtitlePolicy.APIKeyEnv)
 		if keyEnv == "" {
 			keyEnv = "RCFIN_OPENSUBTITLES_API_KEY"
@@ -332,7 +335,7 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 		if clientErr != nil {
 			reason := fmt.Sprintf("required subtitle provider credentials are unavailable (environment variables: %s, %s, %s)", keyEnv, usernameEnv, passwordEnv)
 			log.Printf("subtitle refresh for collection %q skipped: %s", library.ID, reason)
-			if err := queueDeferredSubtitleOperations(ctx, db, library.ID, appendUniquePaths(append([]string(nil), libraryPaths...), inboxPaths...), subtitlePolicy.Languages, time.Now().Add(scanInterval), reason); err != nil {
+			if err := queueDeferredSubtitleOperations(ctx, db, library.ID, appendUniquePaths(append([]string(nil), subtitleLibraryPaths...), inboxPaths...), subtitlePolicy.Languages, time.Now().Add(scanInterval), reason); err != nil {
 				return fmt.Errorf("journal deferred subtitle work: %w", err)
 			}
 		} else {
@@ -342,8 +345,8 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 			if subtitlePolicy.MaxDownloadBytes > 0 {
 				client.SetMaxDownloadBytes(subtitlePolicy.MaxDownloadBytes)
 			}
-			if len(libraryPaths) > 0 {
-				if report, runErr := runSubtitlesForPaths(ctx, collections, db, coll, library, inventory, libraryPaths, false, client); runErr != nil {
+			if len(subtitleLibraryPaths) > 0 {
+				if report, runErr := runSubtitlesForPaths(ctx, collections, db, coll, library, inventory, subtitleLibraryPaths, false, client); runErr != nil {
 					log.Printf("subtitle refresh for collection %q failed: %v", library.ID, runErr)
 				} else {
 					encoded, _ := json.Marshal(report)
@@ -434,7 +437,15 @@ func allVideoPaths(inventory []collection.InventoryEntry, scope string) []string
 	return paths
 }
 
-func pendingMediaPaths(ctx context.Context, db database.Repository, libraryID string, inventory []collection.InventoryEntry, scope string) ([]string, error) {
+func stageWorkPaths(changed, pending []string, inventory []collection.InventoryEntry, scope string, algorithmChanged bool) []string {
+	paths := appendUniquePaths(append([]string(nil), changed...), pending...)
+	if algorithmChanged {
+		paths = appendUniquePaths(paths, allVideoPaths(inventory, scope)...)
+	}
+	return paths
+}
+
+func pendingMediaPaths(ctx context.Context, db database.Repository, libraryID string, inventory []collection.InventoryEntry, scope, stage string) ([]string, error) {
 	operations, err := database.ListAllMediaOperations(ctx, db, libraryID)
 	if err != nil {
 		return nil, err
@@ -448,7 +459,7 @@ func pendingMediaPaths(ctx context.Context, db database.Repository, libraryID st
 	now := time.Now().UTC()
 	var paths []string
 	for _, operation := range operations {
-		if operation.Action != "metadata_refresh" && !strings.HasPrefix(operation.Action, "subtitle_refresh:") {
+		if stage == "metadata" && operation.Action != "metadata_refresh" || stage == "subtitles" && !strings.HasPrefix(operation.Action, "subtitle_refresh:") {
 			continue
 		}
 		due := operation.Status == "planned" || (operation.Status == "failed_retryable" || operation.Status == "retryable") && !operation.NextAttempt.After(now) || operation.Status == "running" && !operation.LeaseUntil.After(now)

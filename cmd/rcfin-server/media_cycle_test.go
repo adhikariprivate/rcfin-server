@@ -106,6 +106,56 @@ func TestDeferredProviderCredentialsKeepNewMediaQueued(t *testing.T) {
 	}
 }
 
+func TestStageWorkPathsOnlyExpandsForChangedStageAlgorithm(t *testing.T) {
+	inventory := []collection.InventoryEntry{
+		{Path: "Film/one.mkv", Scope: collection.InventoryScopeLibrary, Role: collection.InventoryVideo},
+		{Path: "Film/two.mkv", Scope: collection.InventoryScopeLibrary, Role: collection.InventoryVideo},
+	}
+	metadataPaths := stageWorkPaths(nil, nil, inventory, collection.InventoryScopeLibrary, true)
+	subtitlePaths := stageWorkPaths(nil, nil, inventory, collection.InventoryScopeLibrary, false)
+	if len(metadataPaths) != 2 {
+		t.Fatalf("metadata algorithm change selected %v, want both library videos", metadataPaths)
+	}
+	if len(subtitlePaths) != 0 {
+		t.Fatalf("unchanged subtitle algorithm selected %v, want no work", subtitlePaths)
+	}
+}
+
+func TestPendingMediaPathsAreStageScoped(t *testing.T) {
+	repo, err := sqlite.New(&sqlite.ConfigFile{Filename: filepath.Join(t.TempDir(), "media.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	now := time.Now().UTC()
+	for _, operation := range []*model.MediaOperation{
+		{ID: mediaOperationID("movies", "Film/one.mkv", "metadata_refresh"), CollectionID: "movies", ItemKey: "Film/one.mkv", Action: "metadata_refresh", Status: "planned", CreatedAt: now, UpdatedAt: now},
+		{ID: mediaOperationID("movies", "Film/two.mkv", "subtitle_refresh:en"), CollectionID: "movies", ItemKey: "Film/two.mkv", Action: "subtitle_refresh:en", Status: "planned", CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := repo.UpsertMediaOperation(context.Background(), operation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inventory := []collection.InventoryEntry{
+		{Path: "Film/one.mkv", Scope: collection.InventoryScopeLibrary, Role: collection.InventoryVideo},
+		{Path: "Film/two.mkv", Scope: collection.InventoryScopeLibrary, Role: collection.InventoryVideo},
+	}
+	metadataPaths, err := pendingMediaPaths(context.Background(), repo, "movies", inventory, collection.InventoryScopeLibrary, "metadata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	subtitlePaths, err := pendingMediaPaths(context.Background(), repo, "movies", inventory, collection.InventoryScopeLibrary, "subtitles")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metadataPaths) != 1 || metadataPaths[0] != "Film/one.mkv" {
+		t.Fatalf("pending metadata paths = %v", metadataPaths)
+	}
+	if len(subtitlePaths) != 1 || subtitlePaths[0] != "Film/two.mkv" {
+		t.Fatalf("pending subtitle paths = %v", subtitlePaths)
+	}
+}
+
 func TestLibraryRetryFindsAndRequeuesOperationByJobID(t *testing.T) {
 	repo, err := sqlite.New(&sqlite.ConfigFile{Filename: filepath.Join(t.TempDir(), "media.db")})
 	if err != nil {
