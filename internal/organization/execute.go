@@ -420,10 +420,11 @@ func inboxItemReady(ctx context.Context, coll *collection.Collection, repo datab
 		return false, err
 	}
 	type itemFile struct {
-		Path    string `json:"path"`
-		Size    int64  `json:"size"`
-		ModTime int64  `json:"mod_time"`
-		IsDir   bool   `json:"is_dir,omitempty"`
+		Path      string `json:"path"`
+		BackendID string `json:"backend_id,omitempty"`
+		Size      int64  `json:"size"`
+		ModTime   int64  `json:"mod_time"`
+		IsDir     bool   `json:"is_dir,omitempty"`
 	}
 	var files []itemFile
 	for _, entry := range entries {
@@ -437,20 +438,24 @@ func inboxItemReady(ctx context.Context, coll *collection.Collection, repo datab
 			continue
 		}
 		if opts.Inventory != nil {
-			files = append(files, itemFile{Path: entry.Path, Size: entry.Size, ModTime: entry.ModTime, IsDir: entry.IsDir})
+			files = append(files, itemFile{Path: entry.Path, BackendID: entry.BackendID, Size: entry.Size, ModTime: entry.ModTime, IsDir: entry.IsDir})
 			continue
 		}
 		if entry.IsDir {
-			files = append(files, itemFile{Path: entry.Path, Size: entry.Size, ModTime: entry.ModTime, IsDir: true})
+			files = append(files, itemFile{Path: entry.Path, BackendID: entry.BackendID, Size: entry.Size, ModTime: entry.ModTime, IsDir: true})
 			continue
 		}
-		files = append(files, itemFile{Path: entry.Path, Size: entry.Size, ModTime: entry.ModTime})
+		files = append(files, itemFile{Path: entry.Path, BackendID: entry.BackendID, Size: entry.Size, ModTime: entry.ModTime})
 	}
 	if len(files) == 0 {
 		return false, nil
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
-	signatureBytes, _ := json.Marshal(files)
+	signatureBytes, _ := json.Marshal(struct {
+		AlgorithmVersion int        `json:"algorithm_version"`
+		StableFor        int64      `json:"stable_for_ns"`
+		Files            []itemFile `json:"files"`
+	}{AlgorithmVersion: 2, StableFor: int64(stableFor), Files: files})
 	signature := string(signatureBytes)
 	const action = "inbox_stability"
 	existing, err := repo.GetMediaOperation(ctx, coll.ID, source, action)

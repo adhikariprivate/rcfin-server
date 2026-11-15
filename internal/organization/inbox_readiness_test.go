@@ -51,6 +51,14 @@ func TestInboxReadinessWaitsForQuietTreeAndResetsOnChange(t *testing.T) {
 	if err != nil || !ready {
 		t.Fatalf("unchanged tree did not become ready after stable_for: ready=%v err=%v", ready, err)
 	}
+	options.StableFor = time.Second
+	ready, err = InboxItemReady(ctx, coll, repo, ".Inbox/Movie (2025)", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready {
+		t.Fatal("changing stable_for reused elapsed time from the previous readiness policy")
+	}
 	if err := os.WriteFile(mediaPath, []byte("upload finished with more bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
