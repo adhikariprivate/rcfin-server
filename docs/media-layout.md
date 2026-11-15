@@ -211,6 +211,12 @@ the ordinary transient-error retry budget. The operation journal stores
 planned and completed organization operations in SQLite or PostgreSQL and
 reconciles source/destination state before retrying after interruption.
 
+When a background cycle finds eligible new or changed media but provider
+credentials are unavailable, it records retryable metadata/subtitle operations
+instead of dropping that work. The next library cycle retries them after the
+configured scan interval; inspect the reason with `rcfin library status` and
+retry immediately by operation ID when appropriate.
+
 At startup, RCFin optionally loads `.env` from its working directory. Set
 `RCFIN_ENV_FILE` to use a different dotenv path. Variables already present in
 the process environment take precedence. For the provider credentials shown
