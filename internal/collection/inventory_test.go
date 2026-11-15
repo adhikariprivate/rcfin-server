@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/adhikariprivate/rcfin-server/internal/rclonestore"
 )
@@ -45,6 +46,37 @@ func TestInventoryMovieReadsFolderMovieNFOProviderIDs(t *testing.T) {
 		return
 	}
 	t.Fatal("movie video was absent from inventory")
+}
+
+func TestOpenInventoryDirBuildsSortedSnapshotWithoutStorage(t *testing.T) {
+	modTime := time.Date(2025, 4, 3, 2, 1, 0, 0, time.UTC)
+	inventory := []InventoryEntry{
+		{Path: "Show/Season 01/Episode 01.mkv", Size: 123, ModTime: modTime.UnixNano(), Role: InventoryVideo},
+		{Path: "Show/tvshow.nfo", Size: 42, ModTime: modTime.UnixNano(), Role: InventoryNFO},
+	}
+
+	dir := OpenInventoryDir("Show", inventory)
+	entries, err := dir.Readdir(0)
+	if err != nil {
+		t.Fatalf("Readdir() error = %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("snapshot children = %d, want 2", len(entries))
+	}
+	if entries[0].Name() != "Season 01" || !entries[0].IsDir() {
+		t.Fatalf("first child = %q (directory %v), want Season 01 directory", entries[0].Name(), entries[0].IsDir())
+	}
+	if entries[1].Name() != "tvshow.nfo" || entries[1].IsDir() || entries[1].Size() != 42 {
+		t.Fatalf("second child = %q (directory %v, size %d), want tvshow.nfo file size 42", entries[1].Name(), entries[1].IsDir(), entries[1].Size())
+	}
+
+	season, err := OpenInventoryDir("Show/Season 01", inventory).Readdir(0)
+	if err != nil {
+		t.Fatalf("season Readdir() error = %v", err)
+	}
+	if len(season) != 1 || season[0].Name() != "Episode 01.mkv" || season[0].Size() != 123 || !season[0].Modtime().Equal(modTime) {
+		t.Fatalf("season snapshot entry = %#v, want episode metadata from inventory", season)
+	}
 }
 
 func TestInventoryLibraryCoversLibraryAndInboxWithScope(t *testing.T) {

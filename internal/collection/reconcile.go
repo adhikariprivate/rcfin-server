@@ -206,7 +206,7 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 		}
 		for relative, oldChild := range oldChildren {
 			newChild, ok := newChildren[relative]
-			if !ok || oldChild.Fingerprint != newChild.Fingerprint || oldChild.Role != newChild.Role || oldChild.IsDir != newChild.IsDir {
+			if !ok || moveSubtreeEntryFingerprint(oldChild) != moveSubtreeEntryFingerprint(newChild) {
 				continue
 			}
 			matchedOld[oldChild.Path], matchedNew[newChild.Path] = true, true
@@ -329,10 +329,24 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 	sort.Slice(current, func(i, j int) bool { return current[i].Path < current[j].Path })
 	sort.Slice(changes, func(i, j int) bool {
 		if changes[i].Path == changes[j].Path {
+			if changes[i].Kind == changes[j].Kind {
+				return changes[i].OldPath < changes[j].OldPath
+			}
 			return changes[i].Kind < changes[j].Kind
 		}
 		return changes[i].Path < changes[j].Path
 	})
+	uniqueChanges := changes[:0]
+	for _, change := range changes {
+		if len(uniqueChanges) > 0 {
+			previous := uniqueChanges[len(uniqueChanges)-1]
+			if previous.Path == change.Path && previous.Kind == change.Kind && previous.OldPath == change.OldPath {
+				continue
+			}
+		}
+		uniqueChanges = append(uniqueChanges, change)
+	}
+	changes = uniqueChanges
 
 	snapshot := &model.LibraryInventorySnapshot{CollectionID: collectionID, CompletedAt: completed.UTC(), ServerVersion: processingVersions.ServerVersion, AlgorithmVersions: processingVersions.AlgorithmVersions, ListingMode: processingVersions.ListingMode, BackendIDsObserved: backendIDsObserved, Entries: current}
 	if err := repo.SaveLibraryInventory(ctx, snapshot); err != nil {
@@ -379,7 +393,14 @@ func populateTreeFingerprints(entries []model.LibraryInventoryEntry) {
 		for j := start; j < len(ordered) && strings.HasPrefix(ordered[j].Path, prefix); j++ {
 			child := ordered[j]
 			relative := strings.TrimPrefix(child.Path, prefix)
-			descendants = append(descendants, fmt.Sprintf("%s\x00%s\x00%s", relative, child.Role, child.Fingerprint))
+			if child.IsDir {
+				// Parent directory modification times and backend IDs can change
+				// during a rename. Preserve the relative directory layout without
+				// treating either field as stable move identity.
+				descendants = append(descendants, fmt.Sprintf("D\x00%s\x00%s", relative, child.Scope))
+				continue
+			}
+			descendants = append(descendants, fmt.Sprintf("F\x00%s\x00%s\x00%s\x00%d\x00%d", relative, child.Scope, child.Role, child.Size, child.ModTime))
 		}
 		if len(descendants) == 0 {
 			continue
@@ -392,4 +413,11 @@ func populateTreeFingerprints(entries []model.LibraryInventoryEntry) {
 
 func moveFingerprint(entry model.LibraryInventoryEntry) string {
 	return fmt.Sprintf("%t\x00%s\x00%s\x00%d\x00%d", entry.IsDir, entry.Scope, entry.Role, entry.Size, entry.ModTime)
+}
+
+func moveSubtreeEntryFingerprint(entry model.LibraryInventoryEntry) string {
+	if entry.IsDir {
+		return fmt.Sprintf("dir\x00%s\x00%s", entry.Scope, entry.Role)
+	}
+	return moveFingerprint(entry)
 }

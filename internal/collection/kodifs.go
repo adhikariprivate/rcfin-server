@@ -85,7 +85,7 @@ func (cr *CollectionRepo) buildMoviesFromInventory(ctx context.Context, coll *Co
 			}
 			return videos[i] < videos[j]
 		})
-		m := cr.buildMovie(ctx, coll, name, videos)
+		m := cr.buildMovie(ctx, coll, name, videos, inventory)
 		if m != nil {
 			items = append(items, m)
 		}
@@ -105,15 +105,12 @@ func (cr *CollectionRepo) buildMoviesFromInventory(ctx context.Context, coll *Co
 
 // buildMovie builds a movie item from a movie directory. It scans the directory
 // for video files and images, and returns an Item.
-func (cr *CollectionRepo) buildMovie(ctx context.Context, coll *Collection, dir string, videoPaths []string) (movie *Movie) {
+func (cr *CollectionRepo) buildMovie(ctx context.Context, coll *Collection, dir string, videoPaths []string, inventory []InventoryEntry) (movie *Movie) {
 	if ctx.Err() != nil {
 		return nil
 	}
 	d := dir
-	f, err := OpenDir(coll.Storage, d)
-	if err != nil {
-		return
-	}
+	f := OpenInventoryDir(d, inventory)
 	defer f.Close()
 	fi, err := f.Readdir(0)
 	if err != nil {
@@ -331,7 +328,7 @@ func (cr *CollectionRepo) buildShowsFromInventory(ctx context.Context, coll *Col
 		if coll.isInboxPath(name) || strings.HasPrefix(path.Base(name), ".") || strings.HasPrefix(path.Base(name), "+ ") {
 			continue
 		}
-		m := cr.buildShow(ctx, coll, name, playablePaths)
+		m := cr.buildShow(ctx, coll, name, playablePaths, inventory)
 		if m != nil {
 			items = append(items, m)
 		}
@@ -399,7 +396,7 @@ func epMatch(epMap map[string]epMapType, s []string) (ep *Episode, aux, ext stri
 
 // showScanDir scans a show directory for episodes and images. It updates the
 // show item with the found episodes and images.
-func (cr *CollectionRepo) showScanDir(ctx context.Context, coll *Collection, showDir, baseDir, seasonDir string, seasonHint int, show *Show, playablePaths map[string]InventoryEntry) {
+func (cr *CollectionRepo) showScanDir(ctx context.Context, coll *Collection, showDir, baseDir, seasonDir string, seasonHint int, show *Show, playablePaths map[string]InventoryEntry, inventory []InventoryEntry) {
 	if ctx.Err() != nil {
 		return
 	}
@@ -407,10 +404,7 @@ func (cr *CollectionRepo) showScanDir(ctx context.Context, coll *Collection, sho
 	if coll.isInboxPath(d) {
 		return
 	}
-	f, err := OpenDir(coll.Storage, d)
-	if err != nil {
-		return
-	}
+	f := OpenInventoryDir(d, inventory)
 	defer f.Close()
 	fi, err := f.Readdir(0)
 	if err != nil {
@@ -443,7 +437,7 @@ func (cr *CollectionRepo) showScanDir(ctx context.Context, coll *Collection, sho
 						break
 					}
 				}
-				cr.showScanDir(ctx, coll, showDir, d, fn, sn, show, playablePaths)
+				cr.showScanDir(ctx, coll, showDir, d, fn, sn, show, playablePaths, inventory)
 				continue
 			}
 
@@ -595,7 +589,7 @@ func (cr *CollectionRepo) showScanDir(ctx context.Context, coll *Collection, sho
 
 // buildShow builds a show item from a show directory.
 // It scans the directory for episodes and images, and returns an Item
-func (cr *CollectionRepo) buildShow(ctx context.Context, coll *Collection, dir string, playablePaths map[string]InventoryEntry) (show *Show) {
+func (cr *CollectionRepo) buildShow(ctx context.Context, coll *Collection, dir string, playablePaths map[string]InventoryEntry, inventory []InventoryEntry) (show *Show) {
 	if ctx.Err() != nil {
 		return nil
 	}
@@ -607,7 +601,7 @@ func (cr *CollectionRepo) buildShow(ctx context.Context, coll *Collection, dir s
 		path:     dir,
 	}
 	d := dir
-	cr.showScanDir(ctx, coll, dir, d, "", -1, item, playablePaths)
+	cr.showScanDir(ctx, coll, dir, d, "", -1, item, playablePaths, inventory)
 	if ctx.Err() != nil {
 		return nil
 	}

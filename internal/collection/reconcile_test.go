@@ -232,6 +232,34 @@ func TestReconcileLibraryInventoryRecognizesFolderRenameWithoutNewWork(t *testin
 	}
 }
 
+func TestReconcileFolderMoveIgnoresUnstableDirectoryTimesAndBackendIDs(t *testing.T) {
+	repo := &memoryInventoryRepo{}
+	_, err := ReconcileLibraryInventory(context.Background(), repo, "shows", []InventoryEntry{
+		{Path: "Old", Scope: InventoryScopeLibrary, Role: InventoryOther, IsDir: true, ModTime: 10, BackendID: "old-root-id"},
+		{Path: "Old/Season 1", Scope: InventoryScopeLibrary, Role: InventoryOther, IsDir: true, ModTime: 20, BackendID: "old-season-id"},
+		{Path: "Old/Season 1/Episode.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, Size: 100, ModTime: 30, BackendID: "old-object-id"},
+	}, time.Unix(100, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := ReconcileLibraryInventory(context.Background(), repo, "shows", []InventoryEntry{
+		{Path: "New", Scope: InventoryScopeLibrary, Role: InventoryOther, IsDir: true, ModTime: 40, BackendID: "new-root-id"},
+		{Path: "New/Season 1", Scope: InventoryScopeLibrary, Role: InventoryOther, IsDir: true, ModTime: 50, BackendID: "new-season-id"},
+		{Path: "New/Season 1/Episode.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, Size: 100, ModTime: 30, BackendID: "new-object-id"},
+	}, time.Unix(200, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Changes) != 3 {
+		t.Fatalf("folder move produced unexpected changes: %#v", result.Changes)
+	}
+	for _, change := range result.Changes {
+		if change.Kind != InventoryMoved || !strings.HasPrefix(change.OldPath, "Old") || !strings.HasPrefix(change.Path, "New") {
+			t.Fatalf("unstable IDs/times prevented safe subtree move: %#v", result.Changes)
+		}
+	}
+}
+
 func TestReconcileDoesNotInferFolderMoveFromMatchingDirectoryAttributesAlone(t *testing.T) {
 	repo := &memoryInventoryRepo{}
 	_, err := ReconcileLibraryInventory(context.Background(), repo, "movies", []InventoryEntry{
