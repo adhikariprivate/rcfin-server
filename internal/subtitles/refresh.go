@@ -29,6 +29,7 @@ import (
 
 type RefreshOptions struct {
 	InboxOnly         bool
+	Inventory         []collection.InventoryEntry
 	ItemPaths         []string
 	Journal           database.MediaOperationRepo
 	Languages         []string
@@ -92,9 +93,15 @@ func Refresh(ctx context.Context, coll *collection.Collection, client *OpenSubti
 			}
 		}
 	}
-	inventory, err := collection.InventoryCollection(ctx, coll, coll.InboxPath, opts.InboxOnly)
-	if err != nil {
-		return report, err
+	inventory := opts.Inventory
+	if inventory == nil {
+		var err error
+		inventory, err = collection.InventoryCollection(ctx, coll, coll.InboxPath, opts.InboxOnly)
+		if err != nil {
+			return report, err
+		}
+	} else {
+		inventory = collection.InventoryScopeEntries(inventory, opts.InboxOnly)
 	}
 	itemPaths := make(map[string]struct{}, len(opts.ItemPaths))
 	for _, itemPath := range opts.ItemPaths {

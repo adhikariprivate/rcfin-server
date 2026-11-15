@@ -32,6 +32,7 @@ import (
 type Options struct {
 	Write                bool
 	InboxOnly            bool
+	Inventory            []collection.InventoryEntry
 	ItemPaths            []string
 	Journal              database.MediaOperationRepo
 	FetchNFO             bool
@@ -87,9 +88,15 @@ func Run(ctx context.Context, coll *collection.Collection, p provider.Provider, 
 		opts.Language = "en-US"
 	}
 	report := Report{CollectionID: coll.ID}
-	inventory, err := collection.InventoryCollection(ctx, coll, coll.InboxPath, opts.InboxOnly)
-	if err != nil {
-		return report, err
+	inventory := opts.Inventory
+	if inventory == nil {
+		var err error
+		inventory, err = collection.InventoryCollection(ctx, coll, coll.InboxPath, opts.InboxOnly)
+		if err != nil {
+			return report, err
+		}
+	} else {
+		inventory = collection.InventoryScopeEntries(inventory, opts.InboxOnly)
 	}
 	kind := provider.Movie
 	if coll.Type == collection.CollectionTypeShows {

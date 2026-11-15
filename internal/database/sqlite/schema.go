@@ -127,6 +127,11 @@ updated_at DATETIME NOT NULL,
 UNIQUE(collection_id,item_key,action));`,
 		`CREATE INDEX IF NOT EXISTS media_operations_status_idx ON media_operations (status,next_attempt,lease_until)`,
 		`CREATE INDEX IF NOT EXISTS media_operations_collection_updated_idx ON media_operations (collection_id,updated_at DESC,id DESC)`,
+		`CREATE TABLE IF NOT EXISTS library_inventory_snapshots (
+collection_id TEXT NOT NULL PRIMARY KEY,
+generation INTEGER NOT NULL,
+completed_at DATETIME NOT NULL,
+payload TEXT NOT NULL);`,
 
 		`CREATE TABLE IF NOT EXISTS schema_migrations (
 version INTEGER NOT NULL PRIMARY KEY,

@@ -29,6 +29,7 @@ const (
 
 type InventoryEntry struct {
 	Path               string            `json:"path"`
+	Scope              string            `json:"scope,omitempty"`
 	Size               int64             `json:"size"`
 	ModTime            int64             `json:"mod_time,omitempty"`
 	IsDir              bool              `json:"is_dir"`
@@ -52,6 +53,11 @@ type InventoryEntry struct {
 	DiscRoot           string            `json:"disc_root,omitempty"`
 	Reason             string            `json:"reason,omitempty"`
 }
+
+const (
+	InventoryScopeLibrary = "library"
+	InventoryScopeInbox   = "inbox"
+)
 
 var videoExtensionNames = []string{
 	"3g2", "3gp", "avi", "divx", "flv", "m1v", "m2ts", "m2v", "m4u", "m4v", "mkv", "mov",
@@ -147,6 +153,37 @@ func joinReleaseValue(existing, next string) string {
 // read-only inventory. An Inbox is excluded from normal scans and is included
 // only when inboxOnly is true.
 func InventoryCollection(ctx context.Context, coll *Collection, inbox string, inboxOnly bool) ([]InventoryEntry, error) {
+	scope := InventoryScopeLibrary
+	if inboxOnly {
+		scope = InventoryScopeInbox
+	}
+	return inventoryCollection(ctx, coll, inbox, scope, false)
+}
+
+// InventoryLibrary returns one deterministic snapshot spanning both the
+// playable library and its configured Inbox. Unlike InventoryCollection, it
+// includes directories so path restructuring can be reconciled as well.
+func InventoryLibrary(ctx context.Context, coll *Collection, inbox string) ([]InventoryEntry, error) {
+	return inventoryCollection(ctx, coll, inbox, "all", true)
+}
+
+// InventoryScopeEntries filters a unified snapshot for legacy stage APIs that
+// still accept either library-only or Inbox-only work.
+func InventoryScopeEntries(entries []InventoryEntry, inboxOnly bool) []InventoryEntry {
+	filtered := make([]InventoryEntry, 0, len(entries))
+	for _, entry := range entries {
+		if inboxOnly && entry.Scope != InventoryScopeInbox {
+			continue
+		}
+		if !inboxOnly && entry.Scope == InventoryScopeInbox {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
+}
+
+func inventoryCollection(ctx context.Context, coll *Collection, inbox, scope string, includeDirectories bool) ([]InventoryEntry, error) {
 	if coll == nil || coll.Storage == nil {
 		return nil, fmt.Errorf("collection storage is required")
 	}
@@ -168,14 +205,21 @@ func InventoryCollection(ctx context.Context, coll *Collection, inbox string, in
 			insideInbox := inbox != "" && (rel == inbox || strings.HasPrefix(rel, inbox+"/"))
 			// Inbox-only scans must descend through ancestors of a nested Inbox,
 			// without treating those ancestor directories as Inbox inventory.
-			leadingToInbox := inboxOnly && inbox != "" && strings.HasPrefix(inbox, rel+"/")
-			isInboxRoot := inboxOnly && rel == inbox
+			leadingToInbox := scope != InventoryScopeLibrary && inbox != "" && strings.HasPrefix(inbox, rel+"/")
+			isInboxRoot := (scope == InventoryScopeInbox || scope == "all") && rel == inbox
 			if name == "" || (strings.HasPrefix(name, ".") && !isInboxRoot && !leadingToInbox) || strings.HasPrefix(name, "+ ") {
 				continue
 			}
 			if fi.IsDir() {
-				if (inboxOnly && !insideInbox && !leadingToInbox) || (!inboxOnly && insideInbox) {
+				if (scope == InventoryScopeInbox && !insideInbox && !leadingToInbox) || (scope == InventoryScopeLibrary && insideInbox) {
 					continue
+				}
+				if includeDirectories {
+					directory := InventoryEntry{Path: rel, IsDir: true, Size: fi.Size(), ModTime: fi.ModTime().UTC().UnixNano(), Role: InventoryOther, Scope: InventoryScopeLibrary}
+					if insideInbox {
+						directory.Scope = InventoryScopeInbox
+					}
+					result = append(result, directory)
 				}
 				if insideInbox {
 					if format := discDirectoryFormat(name); format != "" && !inventoryExtraPath(rel) {
@@ -195,11 +239,15 @@ func InventoryCollection(ctx context.Context, coll *Collection, inbox string, in
 				}
 				continue
 			}
-			if insideInbox != inboxOnly {
+			if scope == InventoryScopeInbox && !insideInbox || scope == InventoryScopeLibrary && insideInbox {
 				continue
 			}
 			entry := classifyInventoryEntry(rel, fi.Size())
 			entry.ModTime = fi.ModTime().UTC().UnixNano()
+			entry.Scope = InventoryScopeLibrary
+			if insideInbox {
+				entry.Scope = InventoryScopeInbox
+			}
 			if entry.Role == InventoryVideo {
 				if coll.Type == CollectionTypeShows {
 					filenameIDs := entry.ProviderIDs

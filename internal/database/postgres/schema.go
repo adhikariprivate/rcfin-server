@@ -20,6 +20,7 @@ func dbInitSchema(db *sqlx.DB) error {
 		`CREATE TABLE IF NOT EXISTS media_operations (id TEXT PRIMARY KEY, collection_id TEXT NOT NULL, item_key TEXT NOT NULL, source_path TEXT NOT NULL, destination_path TEXT NOT NULL, action TEXT NOT NULL, status TEXT NOT NULL, provider_id TEXT NOT NULL, confidence DOUBLE PRECISION NOT NULL, evidence TEXT NOT NULL, attempts INTEGER NOT NULL, next_attempt TIMESTAMPTZ NOT NULL, lease_owner TEXT NOT NULL, lease_until TIMESTAMPTZ NOT NULL, bytes BIGINT NOT NULL, checksum TEXT NOT NULL, error TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL, UNIQUE(collection_id,item_key,action))`,
 		`CREATE INDEX IF NOT EXISTS media_operations_status_idx ON media_operations (status,next_attempt,lease_until)`,
 		`CREATE INDEX IF NOT EXISTS media_operations_collection_updated_idx ON media_operations (collection_id,updated_at DESC,id DESC)`,
+		`CREATE TABLE IF NOT EXISTS library_inventory_snapshots (collection_id TEXT PRIMARY KEY, generation BIGINT NOT NULL, completed_at TIMESTAMPTZ NOT NULL, payload TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS persons (id TEXT PRIMARY KEY, name TEXT NOT NULL, date_of_birth TIMESTAMPTZ, place_of_birth TEXT, profile_path TEXT, biography TEXT)`,
 		`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied TIMESTAMPTZ NOT NULL)`,
 	}

@@ -21,6 +21,7 @@ type Repository interface {
 	PersonRepo
 	ImageRepo
 	MediaOperationRepo
+	LibraryInventoryRepo
 	StartBackgroundJobs(ctx context.Context)
 	Close() error
 }
@@ -115,6 +116,13 @@ type MediaOperationRepo interface {
 	ListMediaOperationsPage(context.Context, string, int, time.Time, string) ([]model.MediaOperation, error)
 	ClaimMediaOperation(context.Context, string, string, time.Time, time.Time) (bool, error)
 	RenewMediaOperationLease(context.Context, string, string, time.Time, time.Time) (bool, error)
+}
+
+// LibraryInventoryRepo stores only complete scan snapshots. A failed or
+// partial remote listing must never replace the previous generation.
+type LibraryInventoryRepo interface {
+	GetLibraryInventory(context.Context, string) (*model.LibraryInventorySnapshot, error)
+	SaveLibraryInventory(context.Context, *model.LibraryInventorySnapshot) error
 }
 
 // New creates a new database repository based on the type and options provided.

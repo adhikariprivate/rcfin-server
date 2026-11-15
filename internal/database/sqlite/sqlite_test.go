@@ -1,9 +1,12 @@
 package sqlite
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/adhikariprivate/rcfin-server/internal/database/model"
 )
 
 func TestNewUsesPureGoSQLiteDriver(t *testing.T) {
@@ -22,6 +25,34 @@ func TestNewUsesPureGoSQLiteDriver(t *testing.T) {
 	}
 	if version == "" {
 		t.Fatal("SQLite returned an empty version")
+	}
+}
+
+func TestLibraryInventorySnapshotGenerationsPersistAtomically(t *testing.T) {
+	repo, err := New(&ConfigFile{Filename: filepath.Join(t.TempDir(), "inventory.db")})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	for i := 0; i < 2; i++ {
+		snapshot := &model.LibraryInventorySnapshot{
+			CollectionID: "movies",
+			CompletedAt:  time.Unix(int64(i+1), 0).UTC(),
+			Entries:      []model.LibraryInventoryEntry{{Path: "Film/movie.mkv", Scope: "library", Role: "video", Size: int64(i + 1)}},
+		}
+		if err := repo.SaveLibraryInventory(context.Background(), snapshot); err != nil {
+			t.Fatalf("SaveLibraryInventory() error = %v", err)
+		}
+		if snapshot.Generation != int64(i+1) {
+			t.Fatalf("saved generation = %d, want %d", snapshot.Generation, i+1)
+		}
+	}
+	loaded, err := repo.GetLibraryInventory(context.Background(), "movies")
+	if err != nil {
+		t.Fatalf("GetLibraryInventory() error = %v", err)
+	}
+	if loaded == nil || loaded.Generation != 2 || len(loaded.Entries) != 1 || loaded.Entries[0].Size != 2 {
+		t.Fatalf("loaded inventory = %#v", loaded)
 	}
 }
 
