@@ -142,11 +142,11 @@ func TestPendingMediaPathsAreStageScoped(t *testing.T) {
 		{Path: "Film/one.mkv", Scope: collection.InventoryScopeLibrary, Role: collection.InventoryVideo},
 		{Path: "Film/two.mkv", Scope: collection.InventoryScopeLibrary, Role: collection.InventoryVideo},
 	}
-	metadataPaths, err := pendingMediaPaths(context.Background(), repo, "movies", inventory, collection.InventoryScopeLibrary, "metadata")
+	metadataPaths, err := pendingMediaPaths(context.Background(), repo, "movies", inventory, collection.InventoryScopeLibrary, "metadata", collection.CollectionTypeMovies)
 	if err != nil {
 		t.Fatal(err)
 	}
-	subtitlePaths, err := pendingMediaPaths(context.Background(), repo, "movies", inventory, collection.InventoryScopeLibrary, "subtitles")
+	subtitlePaths, err := pendingMediaPaths(context.Background(), repo, "movies", inventory, collection.InventoryScopeLibrary, "subtitles", collection.CollectionTypeMovies)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,8 +195,8 @@ func TestSidecarChangesSelectOnlyAffectedMediaStage(t *testing.T) {
 	if got := affectedMediaPathsBySidecarChanges(nfoChange, showInventory, collection.InventoryScopeLibrary, "metadata", collection.CollectionTypeShows); len(got) != 1 || got[0] != showInventory[0].Path {
 		t.Fatalf("show NFO change selected media paths %v", got)
 	}
-	if got := affectedMediaPathsBySidecarChanges(nfoChange, showInventory, collection.InventoryScopeLibrary, "subtitles", collection.CollectionTypeShows); len(got) != 0 {
-		t.Fatalf("show NFO change selected subtitle work %v", got)
+	if got := affectedMediaPathsBySidecarChanges(nfoChange, showInventory, collection.InventoryScopeLibrary, "subtitles", collection.CollectionTypeShows); len(got) != 1 || got[0] != showInventory[0].Path {
+		t.Fatalf("show NFO change did not select dependent subtitle work %v", got)
 	}
 
 	movieInventory := []collection.InventoryEntry{{Path: "Film/Movie.mkv", Scope: collection.InventoryScopeLibrary, Role: collection.InventoryVideo}}
@@ -207,6 +207,49 @@ func TestSidecarChangesSelectOnlyAffectedMediaStage(t *testing.T) {
 	}
 	if got := affectedMediaPathsBySidecarChanges(subtitleChange, movieInventory, collection.InventoryScopeLibrary, "metadata", collection.CollectionTypeMovies); len(got) != 0 {
 		t.Fatalf("removed subtitle selected metadata work %v", got)
+	}
+}
+
+func TestSubtitleWorkWaitsForMetadataOperation(t *testing.T) {
+	repo, err := sqlite.New(&sqlite.ConfigFile{Filename: filepath.Join(t.TempDir(), "media.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	ctx := context.Background()
+	videoPath := "Film/Movie.mkv"
+	now := time.Now().UTC()
+	for _, operation := range []*model.MediaOperation{
+		{ID: "metadata", CollectionID: "movies", ItemKey: videoPath, SourcePath: videoPath, Action: "metadata_refresh", Status: "failed_retryable", CreatedAt: now, UpdatedAt: now, NextAttempt: now, LeaseUntil: now},
+		{ID: "subtitle", CollectionID: "movies", ItemKey: videoPath, SourcePath: videoPath, Action: "subtitle_refresh:en", Status: "waiting_metadata", Evidence: `{"waiting_for":"metadata"}`, CreatedAt: now, UpdatedAt: now, NextAttempt: now, LeaseUntil: now},
+	} {
+		if err := repo.UpsertMediaOperation(ctx, operation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inventory := []collection.InventoryEntry{{Path: videoPath, Scope: collection.InventoryScopeLibrary, Role: collection.InventoryVideo}}
+	paths, err := pendingMediaPaths(ctx, repo, "movies", inventory, collection.InventoryScopeLibrary, "subtitles", collection.CollectionTypeMovies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 0 {
+		t.Fatalf("subtitle operation became eligible before metadata completed: %v", paths)
+	}
+	metadata, err := repo.GetMediaOperation(ctx, "movies", videoPath, "metadata_refresh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata.Status = "complete"
+	metadata.UpdatedAt = time.Now().UTC()
+	if err := repo.UpsertMediaOperation(ctx, metadata); err != nil {
+		t.Fatal(err)
+	}
+	paths, err = pendingMediaPaths(ctx, repo, "movies", inventory, collection.InventoryScopeLibrary, "subtitles", collection.CollectionTypeMovies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 1 || paths[0] != videoPath {
+		t.Fatalf("subtitle operation did not become eligible after metadata completed: %v", paths)
 	}
 }
 
