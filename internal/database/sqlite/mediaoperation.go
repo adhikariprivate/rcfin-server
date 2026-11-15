@@ -46,6 +46,20 @@ func (s *SqliteRepo) GetMediaOperation(ctx context.Context, collectionID, itemKe
 	return &op, err
 }
 
+// RelinkMediaOperation carries a journal row to a confirmed new path while
+// preserving its state, provider evidence, attempts, and creation timestamp.
+func (s *SqliteRepo) RelinkMediaOperation(ctx context.Context, collectionID, oldID, oldItemKey string, operation *model.MediaOperation) (bool, error) {
+	if operation == nil || operation.ID == "" || operation.ItemKey == "" || operation.Action == "" {
+		return false, fmt.Errorf("relinked media operation ID, item key, and action are required")
+	}
+	result, err := s.dbWriteHandle.ExecContext(ctx, `UPDATE media_operations SET id=?,item_key=?,source_path=?,destination_path=?,evidence=?,updated_at=? WHERE id=? AND collection_id=? AND item_key=? AND status<>'running'`, operation.ID, operation.ItemKey, operation.SourcePath, operation.DestinationPath, operation.Evidence, operation.UpdatedAt, oldID, collectionID, oldItemKey)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows == 1, err
+}
+
 func (s *SqliteRepo) ListMediaOperations(ctx context.Context, collectionID string, limit int) ([]model.MediaOperation, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 100

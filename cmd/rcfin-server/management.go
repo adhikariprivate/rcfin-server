@@ -413,8 +413,12 @@ func runLibraryRefreshCommand(ctx context.Context, repo database.Repository, con
 	if err != nil {
 		return fmt.Errorf("inventory library: %w", err)
 	}
-	if _, err := collection.ReconcileLibraryInventory(ctx, repo, libraryID, inventory, time.Now().UTC(), inventoryVersionsForLibrary(*selected)); err != nil {
+	reconciliation, err := collection.ReconcileLibraryInventory(ctx, repo, libraryID, inventory, time.Now().UTC(), inventoryVersionsForLibrary(*selected))
+	if err != nil {
 		return fmt.Errorf("save inventory snapshot: %w", err)
+	}
+	if err := relinkMovedMediaOperations(ctx, repo, libraryID, coll.Type, reconciliation.Changes, inventory); err != nil {
+		return fmt.Errorf("relink moved media operations: %w", err)
 	}
 	pathsByScope, err := selectRefreshPaths(inventory, *itemPath)
 	if err != nil {
@@ -601,6 +605,9 @@ func runLibraryScanCommand(ctx context.Context, repo database.Repository, config
 	reconciliation, err := collection.ReconcileLibraryInventory(ctx, repo, selected.ID, entries, time.Now().UTC(), inventoryVersionsForLibrary(*selected))
 	if err != nil {
 		return fmt.Errorf("reconcile library inventory: %w", err)
+	}
+	if err := relinkMovedMediaOperations(ctx, repo, selected.ID, collection.CollectionType(selected.Type), reconciliation.Changes, entries); err != nil {
+		return fmt.Errorf("relink moved media operations: %w", err)
 	}
 	return json.NewEncoder(os.Stdout).Encode(reconciliation)
 }

@@ -6,11 +6,13 @@ import "time"
 // remote object observed during a complete library scan.
 type LibraryInventoryEntry struct {
 	Path                string     `json:"path"`
+	PreviousPath        string     `json:"previous_path,omitempty"`
 	FirstSeenGeneration int64      `json:"first_seen_generation,omitempty"`
 	LastSeenGeneration  int64      `json:"last_seen_generation,omitempty"`
 	Scope               string     `json:"scope"`
 	Role                string     `json:"role"`
 	Classification      string     `json:"classification,omitempty"`
+	MoveRelinkPending   bool       `json:"move_relink_pending,omitempty"`
 	Size                int64      `json:"size"`
 	ModTime             int64      `json:"mod_time"`
 	IsDir               bool       `json:"is_dir"`

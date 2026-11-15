@@ -65,3 +65,41 @@ func (s *SqliteRepo) SaveLibraryInventory(ctx context.Context, snapshot *model.L
 	}
 	return tx.Commit()
 }
+
+// MarkLibraryInventoryMovesApplied clears durable move-relink work without
+// creating a new scan generation.
+func (s *SqliteRepo) MarkLibraryInventoryMovesApplied(ctx context.Context, collectionID string, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	tx, err := s.dbWriteHandle.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var payload string
+	if err := tx.GetContext(ctx, &payload, `SELECT payload FROM library_inventory_snapshots WHERE collection_id=?`, collectionID); err != nil {
+		return err
+	}
+	var snapshot model.LibraryInventorySnapshot
+	if err := json.Unmarshal([]byte(payload), &snapshot); err != nil {
+		return fmt.Errorf("decode library inventory snapshot: %w", err)
+	}
+	selected := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		selected[path] = true
+	}
+	for i := range snapshot.Entries {
+		if selected[snapshot.Entries[i].Path] {
+			snapshot.Entries[i].MoveRelinkPending = false
+		}
+	}
+	updated, err := json.Marshal(snapshot)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE library_inventory_snapshots SET payload=? WHERE collection_id=?`, string(updated), collectionID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}

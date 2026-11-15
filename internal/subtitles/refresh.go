@@ -326,6 +326,51 @@ func subtitleJobSignature(video collection.InventoryEntry, language string, opts
 	return hex.EncodeToString(hash[:])
 }
 
+// RelinkOperationEvidence updates a subtitle decision's signature and report
+// paths after inventory has confirmed a path-only move of the same media.
+func RelinkOperationEvidence(operation *model.MediaOperation, video collection.InventoryEntry, oldRoot, newRoot string) error {
+	if operation == nil || !strings.HasPrefix(operation.Action, "subtitle_refresh:") {
+		return nil
+	}
+	var evidence subtitleJobEvidence
+	if err := json.Unmarshal([]byte(operation.Evidence), &evidence); err != nil {
+		return fmt.Errorf("decode subtitle operation evidence: %w", err)
+	}
+	var config struct {
+		InboxOnly                                  bool
+		Languages                                  []string
+		Formats                                    []string
+		HearingImpaired, Forced, OverwriteExisting bool
+		MinimumConfidence                          float64
+		Force                                      bool
+		AlgorithmVersion                           int
+	}
+	if err := json.Unmarshal(evidence.Configuration, &config); err != nil {
+		return fmt.Errorf("decode subtitle operation configuration: %w", err)
+	}
+	language := strings.TrimPrefix(operation.Action, "subtitle_refresh:")
+	opts := RefreshOptions{InboxOnly: config.InboxOnly, Languages: config.Languages, Formats: config.Formats, HearingImpaired: config.HearingImpaired, Forced: config.Forced, OverwriteExisting: config.OverwriteExisting, MinimumConfidence: config.MinimumConfidence, Force: config.Force, AlgorithmVersion: config.AlgorithmVersion}
+	evidence.Signature = subtitleJobSignature(video, language, opts)
+	evidence.Detail.Source = video.Path
+	evidence.Detail.Destination = rebaseSubtitlePath(evidence.Detail.Destination, oldRoot, newRoot)
+	encoded, err := json.Marshal(evidence)
+	if err != nil {
+		return err
+	}
+	operation.Evidence = string(encoded)
+	return nil
+}
+
+func rebaseSubtitlePath(value, oldRoot, newRoot string) string {
+	if value == oldRoot {
+		return newRoot
+	}
+	if strings.HasPrefix(value, oldRoot+"/") {
+		return newRoot + strings.TrimPrefix(value, oldRoot)
+	}
+	return value
+}
+
 func subtitleJournalSignature(evidence string) string {
 	var value subtitleJobEvidence
 	if json.Unmarshal([]byte(evidence), &value) != nil {

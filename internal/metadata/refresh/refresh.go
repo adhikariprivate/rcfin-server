@@ -449,6 +449,66 @@ func journalSignature(evidence string) string {
 	return parsed.Signature
 }
 
+// RelinkOperationEvidence updates the path-bound signature and report paths of
+// a metadata operation after inventory has confirmed the media moved without
+// changing its content fingerprint.
+func RelinkOperationEvidence(operation *model.MediaOperation, entry collection.InventoryEntry, oldRoot, newRoot string) error {
+	if operation == nil || operation.Action != "metadata_refresh" {
+		return nil
+	}
+	var evidence metadataJournalEvidence
+	if err := json.Unmarshal([]byte(operation.Evidence), &evidence); err != nil {
+		return fmt.Errorf("decode metadata operation evidence: %w", err)
+	}
+	var config struct {
+		InboxOnly                                                   bool
+		FetchNFO, FetchArtwork, OverwriteExisting, OverwriteArtwork bool
+		Language                                                    string
+		FallbackLanguages                                           []string
+		ArtworkMaxBytes                                             int64
+		ArtworkMaxWidth, ArtworkMaxHeight                           int
+		ArtworkFormats                                              []string
+		ArtworkPosterSize, ArtworkBackdropSize                      string
+		MinimumConfidence, TieMargin                                float64
+		RefreshExistingAfter                                        time.Duration
+		Force                                                       bool
+		AlgorithmVersion                                            int
+	}
+	if err := json.Unmarshal(evidence.Configuration, &config); err != nil {
+		return fmt.Errorf("decode metadata operation configuration: %w", err)
+	}
+	opts := Options{InboxOnly: config.InboxOnly, FetchNFO: config.FetchNFO, FetchArtwork: config.FetchArtwork, OverwriteExisting: config.OverwriteExisting, OverwriteArtwork: config.OverwriteArtwork, Language: config.Language, FallbackLanguages: config.FallbackLanguages, ArtworkMaxBytes: config.ArtworkMaxBytes, ArtworkMaxWidth: config.ArtworkMaxWidth, ArtworkMaxHeight: config.ArtworkMaxHeight, ArtworkFormats: config.ArtworkFormats, ArtworkPosterSize: config.ArtworkPosterSize, ArtworkBackdropSize: config.ArtworkBackdropSize, MinimumConfidence: config.MinimumConfidence, TieMargin: config.TieMargin, RefreshExistingAfter: config.RefreshExistingAfter, Force: config.Force, AlgorithmVersion: config.AlgorithmVersion}
+	evidence.Signature = metadataJobSignature(entry, opts)
+	if len(evidence.Detail) > 0 {
+		var detail ItemReport
+		if err := json.Unmarshal(evidence.Detail, &detail); err != nil {
+			return fmt.Errorf("decode metadata operation report: %w", err)
+		}
+		detail.Source = entry.Path
+		detail.Destination = rebaseMetadataPath(detail.Destination, oldRoot, newRoot)
+		for i := range detail.Files {
+			detail.Files[i].Destination = rebaseMetadataPath(detail.Files[i].Destination, oldRoot, newRoot)
+		}
+		evidence.Detail, _ = json.Marshal(detail)
+	}
+	encoded, err := json.Marshal(evidence)
+	if err != nil {
+		return err
+	}
+	operation.Evidence = string(encoded)
+	return nil
+}
+
+func rebaseMetadataPath(value, oldRoot, newRoot string) string {
+	if value == oldRoot {
+		return newRoot
+	}
+	if strings.HasPrefix(value, oldRoot+"/") {
+		return newRoot + strings.TrimPrefix(value, oldRoot)
+	}
+	return value
+}
+
 // metadataOutputsPresent prevents a recent successful journal entry from
 // masking sidecars that were subsequently removed or lost from remote storage.
 func metadataOutputsPresent(evidence string, inventory []collection.InventoryEntry, nfoDestination string, opts Options) bool {

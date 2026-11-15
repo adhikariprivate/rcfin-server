@@ -3,8 +3,10 @@ package refresh
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/adhikariprivate/rcfin-server/internal/collection"
+	"github.com/adhikariprivate/rcfin-server/internal/database/model"
 )
 
 func TestMetadataOutputsPresentRequiresPreviouslyWrittenSidecars(t *testing.T) {
@@ -44,6 +46,32 @@ func TestMetadataOutputsPresentRequiresPreviouslyWrittenSidecars(t *testing.T) {
 	}
 	if !metadataOutputsPresent(string(evidence), inventory, "Musk (2026)/movie.nfo", Options{FetchNFO: true}) {
 		t.Fatal("NFO-only refresh was treated as incomplete because artwork is disabled")
+	}
+}
+
+func TestRelinkOperationEvidenceKeepsMetadataDecisionCurrent(t *testing.T) {
+	oldEntry := collection.InventoryEntry{Path: "Old/Movie.mkv", Size: 10, ModTime: 20}
+	newEntry := collection.InventoryEntry{Path: "Renamed/Movie.mkv", Size: 10, ModTime: 20}
+	opts := Options{FetchNFO: true, FetchArtwork: true, Language: "en-US", AlgorithmVersion: AlgorithmVersion, RefreshExistingAfter: 3 * time.Hour}
+	detail, _ := json.Marshal(ItemReport{Source: oldEntry.Path, Destination: "Old/movie.nfo", Files: []FileAction{{Destination: "Old/poster.jpg", State: "written"}}})
+	evidence, _ := json.Marshal(metadataJournalEvidence{Signature: metadataJobSignature(oldEntry, opts), ConfigVersion: metadataJobConfigVersion, Configuration: metadataJobConfiguration(opts), Detail: detail})
+	operation := &model.MediaOperation{Action: "metadata_refresh", SourcePath: oldEntry.Path, Evidence: string(evidence)}
+	if err := RelinkOperationEvidence(operation, newEntry, "Old", "Renamed"); err != nil {
+		t.Fatal(err)
+	}
+	var updated metadataJournalEvidence
+	if err := json.Unmarshal([]byte(operation.Evidence), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Signature != metadataJobSignature(newEntry, opts) {
+		t.Fatal("metadata signature was not recalculated for the new path")
+	}
+	var got ItemReport
+	if err := json.Unmarshal(updated.Detail, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Source != newEntry.Path || got.Destination != "Renamed/movie.nfo" || got.Files[0].Destination != "Renamed/poster.jpg" {
+		t.Fatalf("metadata report paths were not rebased: %#v", got)
 	}
 }
 

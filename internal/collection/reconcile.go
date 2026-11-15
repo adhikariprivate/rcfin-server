@@ -127,6 +127,10 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 			if inventoryEntryWasMissing(prior) || prior.Fingerprint != entry.Fingerprint || prior.Scope != entry.Scope || prior.Role != entry.Role {
 				kind = InventoryChanged
 			}
+			if kind == InventoryUnchanged && prior.Classification == string(InventoryMoved) && prior.PreviousPath != "" && prior.MoveRelinkPending {
+				changes = append(changes, InventoryChange{Kind: InventoryMoved, Path: entry.Path, OldPath: prior.PreviousPath, Entry: entriesByPath[entry.Path]})
+				continue
+			}
 			changes = append(changes, InventoryChange{Kind: kind, Path: entry.Path, Entry: entriesByPath[entry.Path]})
 			continue
 		}
@@ -249,6 +253,18 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 			} else {
 				current[i].Classification = string(kind)
 			}
+			if kind == InventoryMoved {
+				current[i].MoveRelinkPending = true
+				for _, change := range changes {
+					if change.Path == current[i].Path && change.Kind == InventoryMoved {
+						current[i].PreviousPath = change.OldPath
+						break
+					}
+				}
+			} else if kind != InventoryUnchanged {
+				current[i].PreviousPath = ""
+				current[i].MoveRelinkPending = false
+			}
 		} else if current[i].Classification == "" {
 			current[i].Classification = string(InventoryBaseline)
 		}
@@ -269,7 +285,7 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 			if current[i].FirstSeenGeneration == 0 {
 				current[i].FirstSeenGeneration = previous.Generation
 			}
-			if current[i].Identity == "" {
+			if prior.Identity != "" {
 				current[i].Identity = prior.Identity
 			}
 			break

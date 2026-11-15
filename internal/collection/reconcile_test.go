@@ -32,6 +32,22 @@ func (r *memoryInventoryRepo) SaveLibraryInventory(_ context.Context, snapshot *
 	return nil
 }
 
+func (r *memoryInventoryRepo) MarkLibraryInventoryMovesApplied(_ context.Context, collectionID string, paths []string) error {
+	if r.snapshot == nil || r.snapshot.CollectionID != collectionID {
+		return nil
+	}
+	selected := make(map[string]bool, len(paths))
+	for _, entryPath := range paths {
+		selected[entryPath] = true
+	}
+	for i := range r.snapshot.Entries {
+		if selected[r.snapshot.Entries[i].Path] {
+			r.snapshot.Entries[i].MoveRelinkPending = false
+		}
+	}
+	return nil
+}
+
 func TestReconcileLibraryInventoryBootstrapsExistingLibraryWithoutEnrichment(t *testing.T) {
 	repo := &memoryInventoryRepo{}
 	result, err := ReconcileLibraryInventory(context.Background(), repo, "movies", []InventoryEntry{
@@ -60,7 +76,7 @@ func TestReconcileLibraryInventoryBootstrapsExistingLibraryWithoutEnrichment(t *
 
 func TestReconcileLibraryInventoryRecognizesUniqueRenameAndDuplicateAmbiguity(t *testing.T) {
 	repo := &memoryInventoryRepo{snapshot: &model.LibraryInventorySnapshot{Generation: 1, Entries: []model.LibraryInventoryEntry{
-		{Path: "old/movie.mkv", Scope: InventoryScopeLibrary, Role: string(InventoryVideo), Size: 100, ModTime: 20, Fingerprint: "fp"},
+		{Path: "old/movie.mkv", Scope: InventoryScopeLibrary, Role: string(InventoryVideo), Size: 100, ModTime: 20, Fingerprint: "fp", Identity: "tmdb=42"},
 	}}}
 	result, err := ReconcileLibraryInventory(context.Background(), repo, "movies", []InventoryEntry{
 		{Path: "new/movie.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, Size: 100, ModTime: 20},
@@ -70,6 +86,9 @@ func TestReconcileLibraryInventoryRecognizesUniqueRenameAndDuplicateAmbiguity(t 
 	}
 	if len(result.Changes) != 1 || result.Changes[0].Kind != InventoryMoved || result.Changes[0].OldPath != "old/movie.mkv" {
 		t.Fatalf("rename reconciliation = %#v", result.Changes)
+	}
+	if len(repo.snapshot.Entries) != 1 || repo.snapshot.Entries[0].Identity != "tmdb=42" {
+		t.Fatalf("confirmed rename did not retain catalog identity: %#v", repo.snapshot.Entries)
 	}
 
 	repo.snapshot = &model.LibraryInventorySnapshot{Generation: 2, Entries: []model.LibraryInventoryEntry{
@@ -130,6 +149,16 @@ func TestReconcileLibraryInventoryRecognizesFolderRenameWithoutNewWork(t *testin
 		if entry.Path == "Renamed/Movie.mkv" && (entry.FirstSeenGeneration != 1 || entry.LastSeenGeneration != 2) {
 			t.Fatalf("folder move did not preserve inventory age: %#v", entry)
 		}
+	}
+	result, err = ReconcileLibraryInventory(context.Background(), repo, "movies", []InventoryEntry{
+		{Path: "Renamed", Scope: InventoryScopeLibrary, Role: InventoryOther, IsDir: true, ModTime: 40},
+		{Path: "Renamed/Movie.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, Size: 100, ModTime: 20},
+	}, time.Unix(300, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Changes) != 2 || result.Changes[0].Kind != InventoryMoved || result.Changes[1].Kind != InventoryMoved {
+		t.Fatalf("unprocessed move was not replayed from the durable snapshot: %#v", result.Changes)
 	}
 }
 

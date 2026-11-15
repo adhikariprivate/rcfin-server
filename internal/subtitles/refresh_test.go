@@ -2,6 +2,7 @@ package subtitles
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,24 @@ import (
 	"github.com/adhikariprivate/rcfin-server/internal/database/model"
 	"github.com/adhikariprivate/rcfin-server/internal/rclonestore"
 )
+
+func TestRelinkOperationEvidenceKeepsSubtitleDecisionCurrent(t *testing.T) {
+	oldVideo := collection.InventoryEntry{Path: "Old/Movie.mkv", Size: 10, ModTime: 20, Title: "Movie", Year: 2024}
+	newVideo := collection.InventoryEntry{Path: "Renamed/Movie.mkv", Size: 10, ModTime: 20, Title: "Movie", Year: 2024}
+	opts := RefreshOptions{Languages: []string{"en"}, Formats: []string{"srt"}, MinimumConfidence: .8, AlgorithmVersion: AlgorithmVersion}
+	evidence, _ := json.Marshal(subtitleJobEvidence{Signature: subtitleJobSignature(oldVideo, "en", opts), ConfigVersion: subtitleJobConfigVersion, Configuration: subtitleJobConfiguration(opts), Detail: SubtitleAction{Source: oldVideo.Path, Destination: "Old/Movie.en.srt", Language: "en", State: "written"}})
+	operation := &model.MediaOperation{Action: "subtitle_refresh:en", Evidence: string(evidence)}
+	if err := RelinkOperationEvidence(operation, newVideo, "Old", "Renamed"); err != nil {
+		t.Fatal(err)
+	}
+	var updated subtitleJobEvidence
+	if err := json.Unmarshal([]byte(operation.Evidence), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Signature != subtitleJobSignature(newVideo, "en", opts) || updated.Detail.Source != newVideo.Path || updated.Detail.Destination != "Renamed/Movie.en.srt" {
+		t.Fatalf("subtitle evidence was not relinked: %#v", updated)
+	}
+}
 
 type rewriteTransport struct{ target string }
 

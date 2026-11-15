@@ -112,6 +112,7 @@ type MediaOperationRepo interface {
 	CreateMediaOperation(context.Context, *model.MediaOperation) (bool, error)
 	UpsertMediaOperation(context.Context, *model.MediaOperation) error
 	GetMediaOperation(context.Context, string, string, string) (*model.MediaOperation, error)
+	RelinkMediaOperation(context.Context, string, string, string, *model.MediaOperation) (bool, error)
 	ListMediaOperations(context.Context, string, int) ([]model.MediaOperation, error)
 	ListMediaOperationsPage(context.Context, string, int, time.Time, string) ([]model.MediaOperation, error)
 	ClaimMediaOperation(context.Context, string, string, time.Time, time.Time) (bool, error)
@@ -123,6 +124,7 @@ type MediaOperationRepo interface {
 type LibraryInventoryRepo interface {
 	GetLibraryInventory(context.Context, string) (*model.LibraryInventorySnapshot, error)
 	SaveLibraryInventory(context.Context, *model.LibraryInventorySnapshot) error
+	MarkLibraryInventoryMovesApplied(context.Context, string, []string) error
 }
 
 // New creates a new database repository based on the type and options provided.

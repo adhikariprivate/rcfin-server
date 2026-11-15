@@ -56,6 +56,59 @@ func TestLibraryInventorySnapshotGenerationsPersistAtomically(t *testing.T) {
 	}
 }
 
+func TestMarkInventoryMovesAppliedDoesNotCreateScanGeneration(t *testing.T) {
+	repo, err := New(&ConfigFile{Filename: filepath.Join(t.TempDir(), "move-state.db")})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	snapshot := &model.LibraryInventorySnapshot{CollectionID: "movies", CompletedAt: time.Now().UTC(), Entries: []model.LibraryInventoryEntry{{Path: "New/movie.mkv", MoveRelinkPending: true}}}
+	if err := repo.SaveLibraryInventory(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkLibraryInventoryMovesApplied(context.Background(), "movies", []string{"New/movie.mkv"}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := repo.GetLibraryInventory(context.Background(), "movies")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Generation != snapshot.Generation || loaded.Entries[0].MoveRelinkPending {
+		t.Fatalf("move completion changed generation or remained pending: %#v", loaded)
+	}
+}
+
+func TestRelinkMediaOperationPreservesCompletedDecisionAtNewPath(t *testing.T) {
+	repo, err := New(&ConfigFile{Filename: filepath.Join(t.TempDir(), "relink.db")})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	ctx := context.Background()
+	now := time.Now().UTC()
+	old := &model.MediaOperation{ID: "old-id", CollectionID: "movies", ItemKey: "Old/Movie.mkv", SourcePath: "Old/Movie.mkv", Action: "metadata_refresh", Status: "complete", Evidence: `{"signature":"old"}`, CreatedAt: now.Add(-time.Hour), UpdatedAt: now, NextAttempt: now, LeaseUntil: now}
+	if err := repo.UpsertMediaOperation(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	updated := *old
+	updated.ID, updated.ItemKey, updated.SourcePath, updated.Evidence = "new-id", "Renamed/Movie.mkv", "Renamed/Movie.mkv", `{"signature":"current"}`
+	updated.UpdatedAt = now.Add(time.Minute)
+	changed, err := repo.RelinkMediaOperation(ctx, "movies", old.ID, old.ItemKey, &updated)
+	if err != nil || !changed {
+		t.Fatalf("RelinkMediaOperation() = %v, %v", changed, err)
+	}
+	got, err := repo.GetMediaOperation(ctx, "movies", updated.ItemKey, updated.Action)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.ID != "new-id" || got.Status != "complete" || got.CreatedAt != old.CreatedAt || got.Evidence != updated.Evidence {
+		t.Fatalf("relinked decision was not preserved: %#v", got)
+	}
+	if got, err := repo.GetMediaOperation(ctx, "movies", old.ItemKey, old.Action); err != nil || got != nil {
+		t.Fatalf("old journal key remains: operation=%#v err=%v", got, err)
+	}
+}
+
 func TestAccessMigrationRevokesLegacyRegularUserOnly(t *testing.T) {
 	filename := filepath.Join(t.TempDir(), "rcfin.db")
 	repo, err := New(&ConfigFile{Filename: filename})

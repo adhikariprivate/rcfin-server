@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -139,6 +141,9 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 	reconciliation, err := collection.ReconcileLibraryInventory(ctx, db, library.ID, inventory, time.Now().UTC(), inventoryVersionsForLibrary(library))
 	if err != nil {
 		return fmt.Errorf("reconcile inventory: %w", err)
+	}
+	if err := relinkMovedMediaOperations(ctx, db, library.ID, coll.Type, reconciliation.Changes, inventory); err != nil {
+		return fmt.Errorf("relink moved media operations: %w", err)
 	}
 	log.Printf("library scan %q generation=%d entries=%d changes=%d", library.ID, reconciliation.Generation, len(inventory), len(reconciliation.Changes))
 	if err := collections.RefreshCollectionWithInventory(ctx, library.ID, inventory); err != nil {
@@ -609,8 +614,114 @@ func rescanAfterMediaMutation(ctx context.Context, collections *collection.Colle
 	if err != nil {
 		return nil, collection.InventoryReconciliation{}, err
 	}
+	if err := relinkMovedMediaOperations(ctx, db, library.ID, coll.Type, reconciliation.Changes, inventory); err != nil {
+		return nil, collection.InventoryReconciliation{}, err
+	}
 	if err := collections.RefreshCollectionWithInventory(ctx, library.ID, inventory); err != nil {
 		return nil, collection.InventoryReconciliation{}, err
 	}
 	return inventory, reconciliation, nil
+}
+
+func relinkMovedMediaOperations(ctx context.Context, db database.Repository, libraryID string, kind collection.CollectionType, changes []collection.InventoryChange, inventory []collection.InventoryEntry) error {
+	var moves []collection.InventoryChange
+	for _, change := range changes {
+		if change.Kind == collection.InventoryMoved {
+			moves = append(moves, change)
+		}
+	}
+	if len(moves) == 0 {
+		return nil
+	}
+	movedPaths := make([]string, 0, len(moves))
+	for _, move := range moves {
+		movedPaths = append(movedPaths, move.Path)
+	}
+	operations, err := database.ListAllMediaOperations(ctx, db, libraryID)
+	if err != nil {
+		return err
+	}
+	for _, operation := range operations {
+		if operation.Action != "metadata_refresh" && !strings.HasPrefix(operation.Action, "subtitle_refresh:") {
+			continue
+		}
+		var selected *collection.InventoryChange
+		for i := range moves {
+			move := &moves[i]
+			if operation.ItemKey != move.OldPath && !strings.HasPrefix(operation.ItemKey, move.OldPath+"/") {
+				continue
+			}
+			if selected == nil || len(move.OldPath) > len(selected.OldPath) {
+				selected = move
+			}
+		}
+		if selected == nil {
+			continue
+		}
+		newKey := selected.Path + strings.TrimPrefix(operation.ItemKey, selected.OldPath)
+		entry, found := inventoryVideoAtPath(inventory, newKey)
+		if !found {
+			continue
+		}
+		if existing, lookupErr := db.GetMediaOperation(ctx, libraryID, newKey, operation.Action); lookupErr != nil {
+			return lookupErr
+		} else if existing != nil {
+			// A destination journal row is already authoritative. Keep the old
+			// record for audit rather than colliding or overwriting its decision.
+			continue
+		}
+		oldRoot, newRoot := path.Dir(selected.OldPath), path.Dir(selected.Path)
+		if kind == collection.CollectionTypeShows {
+			oldRoot, newRoot = collection.InventoryShowRoot(selected.OldPath), collection.InventoryShowRoot(selected.Path)
+		}
+		updated := operation
+		oldItemKey := operation.ItemKey
+		oldID := operation.ID
+		updated.ItemKey = newKey
+		updated.SourcePath = selected.Path + strings.TrimPrefix(operation.SourcePath, selected.OldPath)
+		updated.DestinationPath = rebaseOperationPath(operation.DestinationPath, oldRoot, newRoot)
+		updated.ID = mediaOperationID(libraryID, newKey, operation.Action)
+		updated.UpdatedAt = time.Now().UTC()
+		if operation.Action == "metadata_refresh" {
+			if err := metadatarefresh.RelinkOperationEvidence(&updated, entry, oldRoot, newRoot); err != nil {
+				return fmt.Errorf("relink metadata evidence for %q: %w", oldItemKey, err)
+			}
+		} else if err := subtitles.RelinkOperationEvidence(&updated, entry, oldRoot, newRoot); err != nil {
+			return fmt.Errorf("relink subtitle evidence for %q: %w", oldItemKey, err)
+		}
+		relinked, err := db.RelinkMediaOperation(ctx, libraryID, oldID, oldItemKey, &updated)
+		if err != nil {
+			return fmt.Errorf("relink journal operation %q: %w", oldItemKey, err)
+		}
+		if !relinked {
+			// A live worker or concurrent scanner still owns this path. Leave the
+			// durable move pending so a later cycle can retry after its lease ends.
+			return nil
+		}
+	}
+	return db.MarkLibraryInventoryMovesApplied(ctx, libraryID, movedPaths)
+}
+
+func inventoryVideoAtPath(inventory []collection.InventoryEntry, target string) (collection.InventoryEntry, bool) {
+	for _, entry := range inventory {
+		if entry.Path == target && entry.Role == collection.InventoryVideo && !entry.IsDir {
+			return entry, true
+		}
+	}
+	return collection.InventoryEntry{}, false
+}
+
+func mediaOperationID(collectionID, itemKey, action string) string {
+	hash := sha256.Sum256([]byte(collectionID + "\x00" + itemKey + "\x00" + action))
+	return hex.EncodeToString(hash[:])
+}
+
+func rebaseOperationPath(value, oldRoot, newRoot string) string {
+	if value == oldRoot {
+		return newRoot
+	}
+	if strings.HasPrefix(value, oldRoot+"/") {
+		return newRoot + strings.TrimPrefix(value, oldRoot)
+	}
+	return value
 }
