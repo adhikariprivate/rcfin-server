@@ -8,11 +8,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/adhikariprivate/rcfin-server/internal/collection/search"
 	"github.com/adhikariprivate/rcfin-server/internal/database"
+	"github.com/adhikariprivate/rcfin-server/internal/database/model"
 	"github.com/adhikariprivate/rcfin-server/internal/idhash"
 	"github.com/adhikariprivate/rcfin-server/internal/rclonestore"
 )
@@ -180,6 +182,25 @@ func (cr *CollectionRepo) RefreshCollectionWithInventory(ctx context.Context, co
 		return fmt.Errorf("collection %q not found", collectionID)
 	}
 	c.stableItemIDs = cr.loadStableItemIDs(ctx, c.ID)
+	var snapshot *model.LibraryInventorySnapshot
+	if cr.repo != nil {
+		loaded, err := cr.repo.GetLibraryInventory(ctx, c.ID)
+		if err != nil {
+			return fmt.Errorf("load collection inventory identity: %w", err)
+		}
+		snapshot = loaded
+		if snapshot != nil {
+			if c.stableItemIDs == nil {
+				c.stableItemIDs = make(map[string]stableItemIdentity)
+			}
+			for _, entry := range snapshot.Entries {
+				if entry.JellyfinID == "" || entry.Scope != InventoryScopeLibrary {
+					continue
+				}
+				c.stableItemIDs[entry.Path] = stableItemIdentity{ID: entry.JellyfinID, ProviderID: entry.JellyfinProviderID}
+			}
+		}
+	}
 	playable := InventoryScopeEntries(inventory, false)
 	switch c.Type {
 	case CollectionTypeMovies:
@@ -192,7 +213,61 @@ func (cr *CollectionRepo) RefreshCollectionWithInventory(ctx context.Context, co
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if snapshot != nil {
+		if err := cr.persistCatalogItemIDs(ctx, snapshot, c.Items); err != nil {
+			return fmt.Errorf("persist stable Jellyfin item IDs: %w", err)
+		}
+	}
 	return cr.BuildSearchIndex(ctx)
+}
+
+func (cr *CollectionRepo) persistCatalogItemIDs(ctx context.Context, snapshot *model.LibraryInventorySnapshot, items []Item) error {
+	if cr.repo == nil || snapshot == nil {
+		return nil
+	}
+	itemIDs := make(map[string]stableItemIdentity, len(items))
+	for _, item := range items {
+		if item == nil || item.Path() == "" || item.ID() == "" {
+			continue
+		}
+		itemIDs[item.Path()] = stableItemIdentity{ID: item.ID(), ProviderID: itemProviderID(item)}
+	}
+	changed := false
+	for i := range snapshot.Entries {
+		entry := &snapshot.Entries[i]
+		identity, exists := itemIDs[entry.Path]
+		if !exists || entry.Scope != InventoryScopeLibrary || !entry.IsDir {
+			continue
+		}
+		if entry.JellyfinID != identity.ID {
+			entry.JellyfinID = identity.ID
+			changed = true
+		}
+		if identity.ProviderID != "" && entry.JellyfinProviderID != identity.ProviderID {
+			entry.JellyfinProviderID = identity.ProviderID
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return cr.repo.UpdateLibraryInventorySnapshot(ctx, snapshot)
+}
+
+func itemProviderID(item Item) string {
+	var providerIDs map[string]string
+	switch typed := item.(type) {
+	case *Movie:
+		providerIDs = typed.Metadata.ProviderIDs()
+	case *Show:
+		providerIDs = typed.Metadata.ProviderIDs()
+	}
+	for key, value := range providerIDs {
+		if value != "" && (strings.EqualFold(key, "tmdb") || strings.EqualFold(key, "tmdbid") || strings.EqualFold(key, "themoviedb")) {
+			return value
+		}
+	}
+	return ""
 }
 
 // updateCollections updates the collections with the latest content from remote storage.

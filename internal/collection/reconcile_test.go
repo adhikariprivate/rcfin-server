@@ -129,12 +129,14 @@ func TestAdoptInventoryMoveAcceptsEqualAttributesWithUnstableBackendID(t *testin
 	old := persistedInventoryEntry(InventoryEntry{Path: "Old/movie.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, BackendID: "object-old", Size: 100, ModTime: 20})
 	old.MissingSince = &now
 	old.Identity = "tmdb=42"
+	old.JellyfinID = "stable-jellyfin-id"
+	old.JellyfinProviderID = "42"
 	current := persistedInventoryEntry(InventoryEntry{Path: "New/movie.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, BackendID: "object-new", Size: 100, ModTime: 20})
 	snapshot := &model.LibraryInventorySnapshot{CollectionID: "movies", Generation: 5, Entries: []model.LibraryInventoryEntry{old, current}}
 	if err := AdoptInventoryMove(snapshot, old.Path, current.Path); err != nil {
 		t.Fatalf("AdoptInventoryMove() rejected matching file evidence: %v", err)
 	}
-	if len(snapshot.Entries) != 1 || snapshot.Entries[0].Path != current.Path || snapshot.Entries[0].Identity != "tmdb=42" {
+	if len(snapshot.Entries) != 1 || snapshot.Entries[0].Path != current.Path || snapshot.Entries[0].Identity != "tmdb=42" || snapshot.Entries[0].JellyfinID != "stable-jellyfin-id" || snapshot.Entries[0].JellyfinProviderID != "42" {
 		t.Fatalf("move adoption did not carry media identity: %#v", snapshot.Entries)
 	}
 }

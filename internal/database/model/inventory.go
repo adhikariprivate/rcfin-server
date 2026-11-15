@@ -20,6 +20,8 @@ type LibraryInventoryEntry struct {
 	Fingerprint         string     `json:"fingerprint"`
 	TreeFingerprint     string     `json:"tree_fingerprint,omitempty"`
 	Identity            string     `json:"identity,omitempty"`
+	JellyfinID          string     `json:"jellyfin_id,omitempty"`
+	JellyfinProviderID  string     `json:"jellyfin_provider_id,omitempty"`
 	MissingSince        *time.Time `json:"missing_since,omitempty"`
 }
 

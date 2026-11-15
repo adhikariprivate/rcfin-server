@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/adhikariprivate/rcfin-server/internal/database/model"
+	"github.com/adhikariprivate/rcfin-server/internal/database/sqlite"
 	"github.com/adhikariprivate/rcfin-server/internal/rclonestore"
 )
 
@@ -111,4 +113,96 @@ func TestInventoryLibraryCoversLibraryAndInboxWithScope(t *testing.T) {
 	if len(inventory) < 4 {
 		t.Fatalf("unified inventory omitted directory records: %#v", inventory)
 	}
+}
+
+func TestCollectionItemIDSurvivesConfirmedFolderRename(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	movieDir := filepath.Join(root, "Film (2025)")
+	if err := os.MkdirAll(movieDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(movieDir, "Film (2025).mkv"), []byte("video fixture"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := sqlite.New(&sqlite.ConfigFile{Filename: filepath.Join(t.TempDir(), "inventory.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	storage, err := rclonestore.New(ctx, root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+	collections := New(&Options{Repo: repo})
+	collections.AddCollectionWithInbox("Movies", "movies", "movies", root, storage, ".Inbox")
+	coll := collections.GetCollection("movies")
+	firstInventory, err := InventoryLibrary(ctx, coll, coll.InboxPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReconcileLibraryInventory(ctx, repo, "movies", firstInventory, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := collections.RefreshCollectionWithInventory(ctx, "movies", firstInventory); err != nil {
+		t.Fatal(err)
+	}
+	if len(coll.Items) != 1 {
+		t.Fatalf("initial movie model count = %d, want 1", len(coll.Items))
+	}
+	firstID := coll.Items[0].ID()
+	snapshot, err := repo.GetLibraryInventory(ctx, "movies")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshotEntryByPath(snapshot, "Film (2025)").JellyfinID != firstID {
+		t.Fatal("initial Jellyfin ID was not saved in the inventory catalog")
+	}
+
+	if err := os.Rename(movieDir, filepath.Join(root, "Renamed Film (2025)")); err != nil {
+		t.Fatal(err)
+	}
+	storage.FlushDirCache()
+	secondInventory, err := InventoryLibrary(ctx, coll, coll.InboxPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconciliation, err := ReconcileLibraryInventory(ctx, repo, "movies", secondInventory, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := false
+	for _, change := range reconciliation.Changes {
+		if change.Kind == InventoryMoved && change.OldPath == "Film (2025)" && change.Path == "Renamed Film (2025)" {
+			moved = true
+		}
+	}
+	if !moved {
+		t.Fatalf("folder rename was not recognized as a move: %#v", reconciliation.Changes)
+	}
+	if err := collections.RefreshCollectionWithInventory(ctx, "movies", secondInventory); err != nil {
+		t.Fatal(err)
+	}
+	if len(coll.Items) != 1 || coll.Items[0].ID() != firstID {
+		t.Fatalf("Jellyfin item ID after folder rename = %v, want %q", coll.Items, firstID)
+	}
+	snapshot, err = repo.GetLibraryInventory(ctx, "movies")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := snapshotEntryByPath(snapshot, "Renamed Film (2025)").JellyfinID; got != firstID {
+		t.Fatalf("catalog Jellyfin ID after move = %q, want %q", got, firstID)
+	}
+}
+
+func snapshotEntryByPath(snapshot *model.LibraryInventorySnapshot, itemPath string) model.LibraryInventoryEntry {
+	if snapshot != nil {
+		for _, entry := range snapshot.Entries {
+			if entry.Path == itemPath {
+				return entry
+			}
+		}
+	}
+	return model.LibraryInventoryEntry{}
 }

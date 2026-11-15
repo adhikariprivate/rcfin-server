@@ -104,6 +104,8 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 		current[i].LastSeenGeneration = nextGeneration
 		if prior, ok := oldByPath[current[i].Path]; ok {
 			current[i].FirstSeenGeneration = prior.FirstSeenGeneration
+			current[i].JellyfinID = prior.JellyfinID
+			current[i].JellyfinProviderID = prior.JellyfinProviderID
 			if current[i].FirstSeenGeneration == 0 {
 				current[i].FirstSeenGeneration = previous.Generation
 			}
@@ -330,6 +332,8 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 			if prior.Identity != "" {
 				current[i].Identity = prior.Identity
 			}
+			current[i].JellyfinID = prior.JellyfinID
+			current[i].JellyfinProviderID = prior.JellyfinProviderID
 			break
 		}
 	}

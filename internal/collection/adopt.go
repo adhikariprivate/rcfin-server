@@ -120,6 +120,8 @@ func carryInventoryIdentity(destination *model.LibraryInventoryEntry, source mod
 	if source.Identity != "" {
 		destination.Identity = source.Identity
 	}
+	destination.JellyfinID = source.JellyfinID
+	destination.JellyfinProviderID = source.JellyfinProviderID
 	destination.Classification = string(InventoryMoved)
 	destination.PreviousPath = sourcePath
 	destination.MoveRelinkPending = true
