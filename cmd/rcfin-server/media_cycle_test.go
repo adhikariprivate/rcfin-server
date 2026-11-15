@@ -64,3 +64,44 @@ func TestConfirmedFolderMoveRelinksCompletedMetadataOperation(t *testing.T) {
 		}
 	}
 }
+
+func TestDeferredProviderCredentialsKeepNewMediaQueued(t *testing.T) {
+	repo, err := sqlite.New(&sqlite.ConfigFile{Filename: filepath.Join(t.TempDir(), "media.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	ctx := context.Background()
+	paths := []string{"Show/S01/Show S01E01.mkv", "Show/S01/Show S01E02.mkv"}
+	inventory := []collection.InventoryEntry{
+		{Path: paths[0], Scope: collection.InventoryScopeLibrary, Role: collection.InventoryVideo},
+		{Path: paths[1], Scope: collection.InventoryScopeLibrary, Role: collection.InventoryVideo},
+	}
+	retryAt := time.Now().Add(10 * time.Minute)
+	if err := queueDeferredMetadataOperations(ctx, repo, "shows", inventory, collection.CollectionTypeShows, paths, retryAt, "TMDb credentials are unavailable"); err != nil {
+		t.Fatal(err)
+	}
+	metadataFirst, err := repo.GetMediaOperation(ctx, "shows", paths[0], "metadata_refresh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadataSecond, err := repo.GetMediaOperation(ctx, "shows", paths[1], "metadata_refresh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadataFirst == nil || metadataFirst.Status != "failed_retryable" || metadataSecond != nil {
+		t.Fatalf("show metadata work should have one durable retry row: first=%#v second=%#v", metadataFirst, metadataSecond)
+	}
+	if err := queueDeferredSubtitleOperations(ctx, repo, "shows", paths, []string{"en"}, retryAt, "OpenSubtitles credentials are unavailable"); err != nil {
+		t.Fatal(err)
+	}
+	for _, itemPath := range paths {
+		operation, err := repo.GetMediaOperation(ctx, "shows", itemPath, "subtitle_refresh:en")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if operation == nil || operation.Status != "failed_retryable" || operation.Error == "" {
+			t.Fatalf("subtitle retry missing for %q: %#v", itemPath, operation)
+		}
+	}
+}

@@ -9,11 +9,13 @@ import (
 	"log"
 	"os"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/adhikariprivate/rcfin-server/internal/collection"
 	"github.com/adhikariprivate/rcfin-server/internal/database"
+	"github.com/adhikariprivate/rcfin-server/internal/database/model"
 	"github.com/adhikariprivate/rcfin-server/internal/metadata/provider"
 	metadatarefresh "github.com/adhikariprivate/rcfin-server/internal/metadata/refresh"
 	"github.com/adhikariprivate/rcfin-server/internal/organization"
@@ -94,7 +96,7 @@ func libraryAutomationLoop(ctx context.Context, collections *collection.Collecti
 			if ctx.Err() != nil {
 				return
 			}
-			if err := runLibraryAutomationCycle(ctx, collections, db, library); err != nil && ctx.Err() == nil {
+			if err := runLibraryAutomationCycle(ctx, collections, db, library, interval); err != nil && ctx.Err() == nil {
 				log.Printf("library automation for %q failed: %v", library.ID, err)
 			}
 			next[library.ID] = time.Now().Add(interval)
@@ -124,7 +126,7 @@ func libraryAutomationLoop(ctx context.Context, collections *collection.Collecti
 	}
 }
 
-func runLibraryAutomationCycle(ctx context.Context, collections *collection.CollectionRepo, db database.Repository, library collectionConfig) error {
+func runLibraryAutomationCycle(ctx context.Context, collections *collection.CollectionRepo, db database.Repository, library collectionConfig, scanInterval time.Duration) error {
 	coll := collections.GetCollection(library.ID)
 	if coll == nil {
 		return fmt.Errorf("collection is not loaded")
@@ -306,6 +308,11 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 				}
 			}
 		}
+	} else if metadataEnabled && hasEligiblePaths(libraryPaths, inboxPaths) {
+		retryAt := time.Now().Add(scanInterval)
+		if err := queueDeferredMetadataOperations(ctx, db, library.ID, inventory, coll.Type, appendUniquePaths(append([]string(nil), libraryPaths...), inboxPaths...), retryAt, "required metadata provider credentials are unavailable"); err != nil {
+			return fmt.Errorf("journal deferred metadata work: %w", err)
+		}
 	}
 
 	if subtitlesEnabled && hasEligiblePaths(libraryPaths, inboxPaths) {
@@ -323,7 +330,11 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 		}
 		client, clientErr := subtitles.NewOpenSubtitles(os.Getenv(keyEnv), os.Getenv(usernameEnv), os.Getenv(passwordEnv), mediaHTTPClient(subtitlePolicy.RequestTimeout))
 		if clientErr != nil {
-			log.Printf("subtitle refresh for collection %q skipped: credential environment variable %s is empty", library.ID, keyEnv)
+			reason := fmt.Sprintf("required subtitle provider credentials are unavailable (environment variables: %s, %s, %s)", keyEnv, usernameEnv, passwordEnv)
+			log.Printf("subtitle refresh for collection %q skipped: %s", library.ID, reason)
+			if err := queueDeferredSubtitleOperations(ctx, db, library.ID, appendUniquePaths(append([]string(nil), libraryPaths...), inboxPaths...), subtitlePolicy.Languages, time.Now().Add(scanInterval), reason); err != nil {
+				return fmt.Errorf("journal deferred subtitle work: %w", err)
+			}
 		} else {
 			if subtitlePolicy.RetryLimit > 0 {
 				client.SetRetryLimit(subtitlePolicy.RetryLimit)
@@ -449,6 +460,80 @@ func pendingMediaPaths(ctx context.Context, db database.Repository, libraryID st
 		}
 	}
 	return paths, nil
+}
+
+func queueDeferredMetadataOperations(ctx context.Context, db database.Repository, libraryID string, inventory []collection.InventoryEntry, kind collection.CollectionType, paths []string, retryAt time.Time, reason string) error {
+	entries := make(map[string]collection.InventoryEntry, len(inventory))
+	for _, entry := range inventory {
+		if entry.Role == collection.InventoryVideo && !entry.IsDir {
+			entries[entry.Path] = entry
+		}
+	}
+	selected := append([]string(nil), paths...)
+	sort.Strings(selected)
+	seenGroups := map[string]bool{}
+	for _, itemPath := range selected {
+		_, exists := entries[itemPath]
+		if !exists {
+			continue
+		}
+		group := path.Dir(itemPath)
+		if kind == collection.CollectionTypeShows {
+			group = collection.InventoryShowRoot(itemPath)
+		}
+		if seenGroups[group] {
+			continue
+		}
+		seenGroups[group] = true
+		if err := queueDeferredMediaOperation(ctx, db, libraryID, itemPath, "metadata_refresh", retryAt, reason); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func queueDeferredSubtitleOperations(ctx context.Context, db database.Repository, libraryID string, paths, languages []string, retryAt time.Time, reason string) error {
+	selectedLanguages := make(map[string]bool, len(languages))
+	for _, language := range languages {
+		language = strings.ToLower(strings.TrimSpace(language))
+		if language != "" {
+			selectedLanguages[language] = true
+		}
+	}
+	for _, itemPath := range paths {
+		for language := range selectedLanguages {
+			if err := queueDeferredMediaOperation(ctx, db, libraryID, itemPath, "subtitle_refresh:"+language, retryAt, reason); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func queueDeferredMediaOperation(ctx context.Context, db database.Repository, libraryID, itemPath, action string, retryAt time.Time, reason string) error {
+	existing, err := db.GetMediaOperation(ctx, libraryID, itemPath, action)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	if retryAt.IsZero() || retryAt.Before(now) {
+		retryAt = now.Add(30 * time.Minute)
+	}
+	if existing != nil && (existing.Status == "needs_review" || existing.Status == "conflict" || existing.Status == "running" && existing.LeaseUntil.After(now)) {
+		return nil
+	}
+	op := model.MediaOperation{
+		ID: mediaOperationID(libraryID, itemPath, action), CollectionID: libraryID,
+		ItemKey: itemPath, SourcePath: itemPath, Action: action,
+		Status: "failed_retryable", Evidence: `{"deferred":"provider_credentials_unavailable"}`,
+		Error: reason, NextAttempt: retryAt, LeaseUntil: now, CreatedAt: now, UpdatedAt: now,
+	}
+	if existing != nil {
+		op.ID = existing.ID
+		op.CreatedAt = existing.CreatedAt
+		op.Attempts = existing.Attempts
+	}
+	return db.UpsertMediaOperation(ctx, &op)
 }
 
 func containsString(values []string, target string) bool {
