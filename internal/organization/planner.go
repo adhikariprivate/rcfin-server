@@ -573,6 +573,7 @@ func renderFolderName(title string, year int, providerID string, opts Options) (
 }
 
 var templateToken = regexp.MustCompile(`\{([a-z_]+)\}`)
+var segmentPunctuationSpace = regexp.MustCompile(`\s+([.,])`)
 
 func renderTemplate(format string, values map[string]string) (string, error) {
 	var invalid string
@@ -606,6 +607,10 @@ func containsExtension(configured []string, ext string) bool {
 func safeSegment(value string) string {
 	value = strings.TrimSpace(value)
 	value = strings.ReplaceAll(value, "..", "")
+	// Optional naming-template fields can disappear while leaving a separator
+	// before punctuation (for example, "Episode Title .mkv"). Normalize that
+	// whitespace before collapsing the remaining spaces.
+	value = segmentPunctuationSpace.ReplaceAllString(value, "$1")
 	var out strings.Builder
 	for _, r := range value {
 		if r == '/' || r == '\\' || r == ':' || r == '*' || r == '?' || r == '"' || r == '<' || r == '>' || r == '|' || r < 32 {
