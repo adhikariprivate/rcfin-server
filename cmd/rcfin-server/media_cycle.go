@@ -316,8 +316,8 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 			stageReport, err = runMetadataForPaths(ctx, db, coll, library, inventory, metadataLibraryPaths, false, tmdb, metadataForced)
 			metadataReport.Items = append(metadataReport.Items, stageReport.Items...)
 			if err != nil {
-				log.Printf("metadata refresh for collection %q failed: %v", library.ID, err)
-				if queueErr := queueDeferredMetadataOperations(ctx, db, library.ID, inventory, coll.Type, metadataLibraryPaths, time.Now().Add(scanInterval), "metadata stage failed: "+err.Error()); queueErr != nil {
+				log.Printf("metadata refresh for collection %q failed; retry work journaled", library.ID)
+				if queueErr := queueDeferredMetadataOperations(ctx, db, library.ID, inventory, coll.Type, metadataLibraryPaths, time.Now().Add(scanInterval), "metadata stage failed; retry scheduled"); queueErr != nil {
 					return fmt.Errorf("journal retryable metadata work: %w", queueErr)
 				}
 			} else {
@@ -329,8 +329,8 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 			stageReport, err = runMetadataForPaths(ctx, db, coll, library, inventory, inboxPaths, true, tmdb, metadataForced)
 			metadataReport.Items = append(metadataReport.Items, stageReport.Items...)
 			if err != nil {
-				log.Printf("Inbox metadata refresh for collection %q failed: %v", library.ID, err)
-				if queueErr := queueDeferredMetadataOperations(ctx, db, library.ID, inventory, coll.Type, inboxPaths, time.Now().Add(scanInterval), "metadata stage failed: "+err.Error()); queueErr != nil {
+				log.Printf("Inbox metadata refresh for collection %q failed; retry work journaled", library.ID)
+				if queueErr := queueDeferredMetadataOperations(ctx, db, library.ID, inventory, coll.Type, inboxPaths, time.Now().Add(scanInterval), "metadata stage failed; retry scheduled"); queueErr != nil {
 					return fmt.Errorf("journal retryable Inbox metadata work: %w", queueErr)
 				}
 			}
@@ -411,10 +411,11 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 				inventory = mergeWrittenSubtitleInventory(coll, inventory, report)
 				refreshCollectionAfterSidecars = refreshCollectionAfterSidecars || subtitleReportMayHaveChangedStorage(report)
 				if runErr != nil {
-					log.Printf("subtitle refresh for collection %q failed: %v", library.ID, runErr)
-					if queueErr := queueDeferredSubtitleOperations(ctx, db, library.ID, subtitleLibraryPaths, subtitlePolicy.Languages, time.Now().Add(scanInterval), "subtitle stage failed: "+runErr.Error()); queueErr != nil {
+					log.Printf("subtitle refresh for collection %q failed; retry work journaled", library.ID)
+					if queueErr := queueDeferredSubtitleOperations(ctx, db, library.ID, subtitleLibraryPaths, subtitlePolicy.Languages, time.Now().Add(scanInterval), "subtitle stage failed; retry scheduled"); queueErr != nil {
 						return fmt.Errorf("journal retryable subtitle work: %w", queueErr)
 					}
+					subtitleStageSucceeded = true
 				} else {
 					encoded, _ := json.Marshal(report)
 					log.Printf("subtitle refresh report: %s", encoded)
@@ -425,10 +426,11 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 				inventory = mergeWrittenSubtitleInventory(coll, inventory, report)
 				refreshCollectionAfterSidecars = refreshCollectionAfterSidecars || subtitleReportMayHaveChangedStorage(report)
 				if runErr != nil {
-					log.Printf("Inbox subtitle refresh for collection %q failed: %v", library.ID, runErr)
-					if queueErr := queueDeferredSubtitleOperations(ctx, db, library.ID, subtitleInboxPaths, subtitlePolicy.Languages, time.Now().Add(scanInterval), "subtitle stage failed: "+runErr.Error()); queueErr != nil {
+					log.Printf("Inbox subtitle refresh for collection %q failed; retry work journaled", library.ID)
+					if queueErr := queueDeferredSubtitleOperations(ctx, db, library.ID, subtitleInboxPaths, subtitlePolicy.Languages, time.Now().Add(scanInterval), "subtitle stage failed; retry scheduled"); queueErr != nil {
 						return fmt.Errorf("journal retryable Inbox subtitle work: %w", queueErr)
 					}
+					subtitleStageSucceeded = true
 				} else {
 					encoded, _ := json.Marshal(report)
 					log.Printf("Inbox subtitle report: %s", encoded)
@@ -817,10 +819,14 @@ func queueDeferredMediaOperation(ctx context.Context, db database.Repository, li
 	if existing != nil && (existing.Status == "needs_review" || existing.Status == "conflict" || existing.Status == "running" && existing.LeaseUntil.After(now)) {
 		return nil
 	}
+	deferredReason := "stage_retry"
+	if strings.Contains(strings.ToLower(reason), "credential") {
+		deferredReason = "provider_credentials_unavailable"
+	}
 	op := model.MediaOperation{
 		ID: mediaOperationID(libraryID, itemPath, action), CollectionID: libraryID,
 		ItemKey: itemPath, SourcePath: itemPath, Action: action,
-		Status: "failed_retryable", Evidence: `{"deferred":"provider_credentials_unavailable"}`,
+		Status: "failed_retryable", Evidence: `{"deferred":"` + deferredReason + `"}`,
 		Error: reason, NextAttempt: retryAt, LeaseUntil: now, CreatedAt: now, UpdatedAt: now,
 	}
 	if existing != nil {

@@ -235,6 +235,10 @@ func TestSubtitleWorkWaitsForMetadataOperation(t *testing.T) {
 	if len(paths) != 0 {
 		t.Fatalf("subtitle operation became eligible before metadata completed: %v", paths)
 	}
+	blocked, err := unresolvedMetadataPaths(ctx, repo, "movies", []string{videoPath}, collection.CollectionTypeMovies)
+	if err != nil || len(blocked) != 1 || blocked[0] != videoPath {
+		t.Fatalf("unresolved metadata did not block subtitle work: paths=%v err=%v", blocked, err)
+	}
 	metadata, err := repo.GetMediaOperation(ctx, "movies", videoPath, "metadata_refresh")
 	if err != nil {
 		t.Fatal(err)
@@ -250,6 +254,10 @@ func TestSubtitleWorkWaitsForMetadataOperation(t *testing.T) {
 	}
 	if len(paths) != 1 || paths[0] != videoPath {
 		t.Fatalf("subtitle operation did not become eligible after metadata completed: %v", paths)
+	}
+	blocked, err = unresolvedMetadataPaths(ctx, repo, "movies", []string{videoPath}, collection.CollectionTypeMovies)
+	if err != nil || len(blocked) != 0 {
+		t.Fatalf("completed metadata still blocked subtitles: paths=%v err=%v", blocked, err)
 	}
 }
 
