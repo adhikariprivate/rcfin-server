@@ -153,8 +153,13 @@ func Run(ctx context.Context, coll *collection.Collection, p provider.Provider, 
 							refreshAfter = 24 * time.Hour
 						}
 						if time.Since(existing.UpdatedAt) < refreshAfter {
-							report.Items = append(report.Items, ItemReport{Source: entry.Path, Destination: destination, ProviderID: existing.ProviderID, Confidence: existing.Confidence, State: "fresh", Reason: "refresh interval has not elapsed"})
-							continue
+							if metadataOutputsPresent(existing.Evidence, inventory, destination, opts) {
+								report.Items = append(report.Items, ItemReport{Source: entry.Path, Destination: destination, ProviderID: existing.ProviderID, Confidence: existing.Confidence, State: "fresh", Reason: "refresh interval has not elapsed"})
+								continue
+							}
+							// The last successful run's sidecars are missing. Ignore
+							// any still-fresh NFO provenance and regenerate outputs.
+							forceRefresh = true
 						}
 					case "running":
 						if time.Now().Before(existing.LeaseUntil) {
@@ -425,6 +430,63 @@ func journalSignature(evidence string) string {
 		return ""
 	}
 	return parsed.Signature
+}
+
+// metadataOutputsPresent prevents a recent successful journal entry from
+// masking sidecars that were subsequently removed or lost from remote storage.
+func metadataOutputsPresent(evidence string, inventory []collection.InventoryEntry, nfoDestination string, opts Options) bool {
+	if opts.FetchNFO {
+		found := false
+		for _, entry := range inventory {
+			if entry.Path == nfoDestination && entry.Role == collection.InventoryNFO {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	if !opts.FetchArtwork {
+		return true
+	}
+	var journal metadataJournalEvidence
+	if json.Unmarshal([]byte(evidence), &journal) != nil || len(journal.Detail) == 0 {
+		return false
+	}
+	var previous ItemReport
+	if json.Unmarshal(journal.Detail, &previous) != nil {
+		return false
+	}
+	dir := path.Dir(nfoDestination)
+	for _, action := range previous.Files {
+		base := strings.ToLower(path.Base(action.Destination))
+		kind := ""
+		switch {
+		case strings.HasPrefix(base, "poster."):
+			kind = "poster"
+		case strings.HasPrefix(base, "backdrop."):
+			kind = "backdrop"
+		}
+		if kind == "" || (action.State != "written" && action.State != "skipped" && action.State != "unchanged") {
+			continue
+		}
+		present := false
+		for _, entry := range inventory {
+			if entry.Role != collection.InventoryArtwork || path.Dir(entry.Path) != dir {
+				continue
+			}
+			name := strings.ToLower(strings.TrimSuffix(path.Base(entry.Path), path.Ext(entry.Path)))
+			if name == kind || (kind == "poster" && (name == "folder" || name == "cover" || name == "movie")) || (kind == "backdrop" && (name == "fanart" || name == "background")) {
+				present = true
+				break
+			}
+		}
+		if !present {
+			return false
+		}
+	}
+	return true
 }
 
 func recordMetadataOperations(ctx context.Context, journal database.MediaOperationRepo, collectionID string, items []ItemReport, inventory []collection.InventoryEntry, opts Options, worker string, leaseKeeper *database.MediaOperationLeaseKeeper) error {
