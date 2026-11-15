@@ -321,22 +321,34 @@ those values.
 Capability reports expose the backend's advertised `Move`, `DirMove`,
 `PutStream`, and `Copy` operations. `put` reflects whether that library's VFS
 is configured writable; it does not predict backend permissions or availability.
-For remote plans that invoke an advertised move, `possible_copy_delete` is true
-because Rclone's capability flag does not establish the provider's underlying
-rename behavior. Local filesystem moves are reported separately and use the
-local backend's atomic `Move`. Remote individual file renames require an
-advertised `Copy`: RCFin stages a sibling temporary object, verifies size and
-an available checksum, promotes it, verifies the final destination, then
-removes the original. RCFin refuses remote file moves without the operations
-needed for that verified sequence. Local directory renames use advertised
-`DirMove`. Remote directory moves require advertised `Copy` and `DirMove`:
-RCFin stages every file in a temporary sibling, verifies sizes and available
-checksums, promotes the staged tree, verifies the destination against the
-source (including empty directory paths), then reloads and rechecks each source
-file against its destination immediately before removal. Administrator staging
-follows the same path.
-The journal records the expected recursive byte total before a move, and
-interrupted operations reconcile source, staged tree, and destination state.
+When a same-library backend advertises `Move` or `DirMove`, RCFin calls that
+operation with the original source and final destination for local and remote
+libraries. This applies to movie folders, show and season folders, episode file
+renames, sidecars, and explicit existing-item staging into `.Inbox`. RCFin does
+not copy media to a temporary location first, and it never falls back to a
+copy after an advertised backend move fails. A backend without the required
+move capability remains unsupported and is sent for review; RCFin does not
+broaden copy/delete behavior for it.
+
+Rclone's generic feature flags say only whether `Move` or `DirMove` is
+available. They do not say whether a backend implements it as a server-side
+rename or as copy/delete, and they do not guarantee provider-level atomicity.
+Local moves are reported as `local_rename` with
+`possible_copy_delete: false`. For remote moves, `move_semantics` is
+`backend_defined` and `possible_copy_delete` is `null` because Rclone exposes no
+generic way to determine the provider's implementation. `same_filesystem`
+means both paths are handled by the one configured library backend; it is not
+an atomicity guarantee.
+
+The journal records the expected recursive byte total and available checksum
+evidence before a directory move. After `DirMove`, RCFin verifies that the
+destination exists as a directory, the source is absent, and the destination
+has the expected byte total before recording completion. File moves similarly
+verify that the destination exists with the expected size and the source is
+absent. If a backend returns an error or leaves an ambiguous state, RCFin does
+no cleanup and lets journal recovery reconcile the resulting paths. Recovery may remove
+a duplicate source only after the destination verifies against the journaled
+evidence; mismatched or partial source/destination trees remain for review.
 When the backend exposes checksums, RCFin also journals a checksum for a file
 or a deterministic checksum over every relative directory path (including
 empty folders), file path, and backend hash in a directory;
@@ -346,11 +358,6 @@ uses retry backoff; an actual mismatch remains in review. Destination-only
 recovery can use the recorded byte total when hashes are unavailable. If both
 source and destination directories remain after an interrupted move, RCFin
 requires matching journaled tree checksums before it removes the source.
-Rclone does not guarantee provider-level atomicity, so remote plans continue
-to report `possible_copy_delete: true`.
-`same_filesystem` means an operation stays within the one configured library
-backend. It does not promise an atomic rename, consistency across remote
-objects, or a transaction. Rclone's feature flags describe availability only.
 For a multi-episode video, subtitle download is attempted only when
 OpenSubtitles returns an exact file-hash match with the requested language and
 flags. Without that match, the subtitle operation stays in review.

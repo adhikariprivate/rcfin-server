@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path"
@@ -105,13 +106,16 @@ func (l *Library) Capabilities() Capabilities {
 	}
 	f := l.backend.Features()
 	return Capabilities{
-		Move:           f.Move != nil,
-		DirMove:        f.DirMove != nil,
-		RecursiveList:  f.ListR != nil,
-		Put:            !l.vfs.Opt.ReadOnly,
-		PutStream:      f.PutStream != nil,
-		Copy:           f.Copy != nil,
-		Local:          f.IsLocal,
+		Move:          f.Move != nil,
+		DirMove:       f.DirMove != nil,
+		RecursiveList: f.ListR != nil,
+		Put:           !l.vfs.Opt.ReadOnly,
+		PutStream:     f.PutStream != nil,
+		Copy:          f.Copy != nil,
+		Local:         f.IsLocal,
+		// A Library is bound to one configured Fs; its source and destination
+		// paths therefore share that Fs. This says nothing about backend
+		// atomicity or whether DirMove is implemented with copy/delete.
 		SameFilesystem: true,
 	}
 }
@@ -457,9 +461,9 @@ func IsNotFound(err error) bool {
 	return err != nil && (errors.Is(err, fs.ErrorObjectNotFound) || errors.Is(err, fs.ErrorDirNotFound) || errors.Is(err, os.ErrNotExist))
 }
 
-// MoveFile stages a backend copy, verifies the final destination, and removes
-// the original only after verification. The backend must advertise Copy and
-// Move; RCFin does not use an unverified move or copy/delete fallback.
+// MoveFile uses the configured backend's Move operation directly. It never
+// falls back to copying media if Move fails; journal recovery handles any
+// ambiguous source/destination state after verifying it.
 func (l *Library) MoveFile(ctx context.Context, source, destination string, recoverExisting bool) error {
 	return l.move(ctx, source, destination, false, recoverExisting)
 }
@@ -526,15 +530,15 @@ func (l *Library) move(ctx context.Context, source, destination string, director
 	if directory && features.DirMove == nil {
 		return fmt.Errorf("backend does not advertise DirMove")
 	}
-	if directory && !features.IsLocal && features.Copy == nil {
-		return fmt.Errorf("remote directory moves require advertised Copy for staged verification")
-	}
-	if !directory && (features.Move == nil || features.Copy == nil && !features.IsLocal) {
-		return fmt.Errorf("backend must advertise Copy and Move for verified file moves, or be a local filesystem with atomic Move")
+	if !directory && features.Move == nil {
+		return fmt.Errorf("backend does not advertise Move")
 	}
 	sourceInfo, err := l.vfs.Stat(src)
 	if err != nil {
 		return fmt.Errorf("stat move source %q: %w", src, err)
+	}
+	if directory && !sourceInfo.IsDir() {
+		return fmt.Errorf("directory move source %q is not a directory", src)
 	}
 	if destinationInfo, statErr := l.vfs.Stat(dst); statErr == nil {
 		if directory {
@@ -544,7 +548,7 @@ func (l *Library) move(ctx context.Context, source, destination string, director
 			if !recoverExisting {
 				return fmt.Errorf("move destination %q already exists", dst)
 			}
-			if err := l.verifyDirectorySubset(ctx, src, dst); err != nil {
+			if err := l.verifyDirectoryContent(ctx, src, dst); err != nil {
 				return fmt.Errorf("existing directory destination does not verify against source: %w", err)
 			}
 			if err := l.removeDirectoryTree(ctx, src, dst); err != nil {
@@ -555,13 +559,10 @@ func (l *Library) move(ctx context.Context, source, destination string, director
 		if destinationInfo.IsDir() {
 			return fmt.Errorf("move destination %q already exists", dst)
 		}
-		if features.IsLocal && features.Copy == nil {
-			return fmt.Errorf("local move found an existing destination and no Copy operation is available for recovery")
-		}
 		if !recoverExisting {
 			return fmt.Errorf("move destination %q already exists", dst)
 		}
-		if err := l.moveFileVerified(ctx, features, src, dst, sourceInfo.Size(), recoverExisting); err != nil {
+		if err := l.recoverFileMove(ctx, src, dst, sourceInfo.Size()); err != nil {
 			return err
 		}
 		l.vfs.FlushDirCache()
@@ -580,48 +581,62 @@ func (l *Library) move(ctx context.Context, source, destination string, director
 		if sourceInfo.IsDir() {
 			return fmt.Errorf("file move source is a directory")
 		}
-		if features.IsLocal {
-			sourceObject, objectErr := l.backend.NewObject(ctx, src)
-			if objectErr != nil {
-				return fmt.Errorf("load local move source object: %w", objectErr)
-			}
-			if _, moveErr := features.Move(ctx, sourceObject, dst); moveErr != nil {
-				return fmt.Errorf("local atomic Move failed: %w", moveErr)
-			}
-		} else if err := l.moveFileVerified(ctx, features, src, dst, sourceInfo.Size(), recoverExisting); err != nil {
-			return err
+		sourceObject, objectErr := l.backend.NewObject(ctx, src)
+		if objectErr != nil {
+			return fmt.Errorf("load move source object: %w", objectErr)
 		}
-	} else if features.IsLocal {
+		log.Printf("rclonestore Move started: source=%q destination=%q", src, dst)
+		if _, moveErr := features.Move(ctx, sourceObject, dst); moveErr != nil {
+			l.vfs.FlushDirCache()
+			return logMoveFailure("Move", src, dst, fmt.Errorf("backend Move failed; source/destination state may need journal recovery: %w", moveErr))
+		}
+	} else {
+		// DirMove is scoped to this Library's configured Fs, so the original
+		// paths are already on the same backend. Do not stage media or fall back
+		// to Copy if the backend operation fails.
+		log.Printf("rclonestore DirMove started: source=%q destination=%q", src, dst)
 		if err := features.DirMove(ctx, l.backend, src, dst); err != nil {
-			return fmt.Errorf("local directory Move failed: %w", err)
+			l.vfs.FlushDirCache()
+			return logMoveFailure("DirMove", src, dst, fmt.Errorf("backend DirMove failed; source/destination state may need journal recovery: %w", err))
 		}
-	} else if err := l.moveDirectoryVerified(ctx, features, src, dst, sourceTreeBytes); err != nil {
-		return fmt.Errorf("verified directory move failed: %w", err)
+	}
+	operation := "Move"
+	if directory {
+		operation = "DirMove"
 	}
 	l.vfs.FlushDirCache()
 	destinationInfo, err := l.vfs.Stat(dst)
 	if err != nil {
-		return fmt.Errorf("move may have partially completed; destination verification failed: %w", err)
+		return logMoveFailure(operation, src, dst, fmt.Errorf("move may have partially completed; destination verification failed: %w", err))
 	}
 	if _, sourceErr := l.vfs.Stat(src); !IsNotFound(sourceErr) {
 		if sourceErr == nil {
-			return fmt.Errorf("move verification found both source and destination")
+			return logMoveFailure(operation, src, dst, fmt.Errorf("move verification found both source and destination"))
 		}
-		return fmt.Errorf("move may have partially completed; source verification failed: %w", sourceErr)
+		return logMoveFailure(operation, src, dst, fmt.Errorf("move may have partially completed; source verification failed: %w", sourceErr))
 	}
 	if directory && !destinationInfo.IsDir() {
-		return fmt.Errorf("directory move destination is not a directory")
+		return logMoveFailure(operation, src, dst, fmt.Errorf("directory move destination is not a directory"))
+	}
+	if !directory && (destinationInfo.IsDir() || sourceInfo.Size() < 0 || destinationInfo.Size() != sourceInfo.Size()) {
+		return logMoveFailure(operation, src, dst, fmt.Errorf("file move destination verification failed: source size=%d destination size=%d", sourceInfo.Size(), destinationInfo.Size()))
 	}
 	if directory {
 		destinationTreeBytes, sizeErr := l.DirectorySize(ctx, dst)
 		if sizeErr != nil {
-			return fmt.Errorf("verify move destination directory size: %w", sizeErr)
+			return logMoveFailure(operation, src, dst, fmt.Errorf("verify move destination directory size: %w", sizeErr))
 		}
 		if destinationTreeBytes != sourceTreeBytes {
-			return fmt.Errorf("directory move size verification failed: source=%d destination=%d", sourceTreeBytes, destinationTreeBytes)
+			return logMoveFailure(operation, src, dst, fmt.Errorf("directory move size verification failed: source=%d destination=%d", sourceTreeBytes, destinationTreeBytes))
 		}
 	}
+	log.Printf("rclonestore %s complete: source=%q destination=%q", operation, src, dst)
 	return nil
+}
+
+func logMoveFailure(operation, source, destination string, err error) error {
+	log.Printf("rclonestore %s failed: source=%q destination=%q error=%q", operation, source, destination, err)
+	return err
 }
 
 type directorySnapshot struct {
@@ -682,20 +697,6 @@ func (l *Library) verifyDirectoryContent(ctx context.Context, source, destinatio
 	return verifyDirectorySnapshots(ctx, src, dst, false)
 }
 
-// verifyDirectorySubset permits recovery after source cleanup removed some
-// entries: every file and directory still present must match its verified copy.
-func (l *Library) verifyDirectorySubset(ctx context.Context, source, destination string) error {
-	src, err := l.snapshotDirectory(ctx, source)
-	if err != nil {
-		return fmt.Errorf("snapshot source directory: %w", err)
-	}
-	dst, err := l.snapshotDirectory(ctx, destination)
-	if err != nil {
-		return fmt.Errorf("snapshot destination directory: %w", err)
-	}
-	return verifyDirectorySnapshots(ctx, src, dst, true)
-}
-
 func verifyDirectorySnapshots(ctx context.Context, source, destination directorySnapshot, subset bool) error {
 	if source.bytes > destination.bytes || len(source.files) > len(destination.files) {
 		return fmt.Errorf("source directory is larger than verified destination")
@@ -735,86 +736,6 @@ func relativeDirectory(root, directory string) string {
 		return ""
 	}
 	return strings.TrimPrefix(directory, root+"/")
-}
-
-func (l *Library) moveDirectoryVerified(ctx context.Context, features *fs.Features, source, destination string, expectedBytes int64) error {
-	sourceSnapshot, err := l.snapshotDirectory(ctx, source)
-	if err != nil {
-		return fmt.Errorf("snapshot source directory: %w", err)
-	}
-	if sourceSnapshot.bytes != expectedBytes {
-		return fmt.Errorf("source directory changed before staging: expected=%d actual=%d", expectedBytes, sourceSnapshot.bytes)
-	}
-	digest := sha256.Sum256([]byte(source + "\x00" + destination))
-	tempRoot, err := safeMutationPath(path.Join(path.Dir(destination), ".rcfin-move-"+hex.EncodeToString(digest[:8])+".tmp"))
-	if err != nil {
-		return err
-	}
-	if _, err := l.vfs.Stat(tempRoot); IsNotFound(err) {
-		if err := l.vfs.MkdirAll(tempRoot, 0o755); err != nil {
-			return fmt.Errorf("create staged directory: %w", err)
-		}
-	} else if err != nil {
-		return fmt.Errorf("check staged directory: %w", err)
-	}
-	for _, directory := range sourceSnapshot.dirs[1:] {
-		relative := strings.TrimPrefix(directory, source+"/")
-		if err := l.vfs.MkdirAll(path.Join(tempRoot, relative), 0o755); err != nil {
-			return fmt.Errorf("create staged subdirectory %q: %w", relative, err)
-		}
-	}
-	for relative, sourceObject := range sourceSnapshot.files {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		tempPath := path.Join(tempRoot, relative)
-		if _, err := l.vfs.Stat(path.Dir(tempPath)); IsNotFound(err) {
-			if err := l.vfs.MkdirAll(path.Dir(tempPath), 0o755); err != nil {
-				return fmt.Errorf("create staged parent for %q: %w", relative, err)
-			}
-		} else if err != nil {
-			return fmt.Errorf("check staged parent for %q: %w", relative, err)
-		}
-		staged, stagedErr := l.backend.NewObject(ctx, tempPath)
-		if stagedErr == nil {
-			if err := verifyObjectContent(ctx, sourceObject, staged); err != nil {
-				return fmt.Errorf("existing staged file %q does not verify: %w", relative, err)
-			}
-			continue
-		}
-		if !IsNotFound(stagedErr) {
-			return fmt.Errorf("check staged file %q: %w", relative, stagedErr)
-		}
-		staged, err = features.Copy(ctx, sourceObject, tempPath)
-		if err != nil {
-			return fmt.Errorf("stage file %q: %w", relative, err)
-		}
-		if staged == nil {
-			staged, err = l.backend.NewObject(ctx, tempPath)
-			if err != nil {
-				return fmt.Errorf("load staged file %q: %w", relative, err)
-			}
-		}
-		if err := verifyObjectContent(ctx, sourceObject, staged); err != nil {
-			return fmt.Errorf("staged file %q failed verification: %w", relative, err)
-		}
-	}
-	if err := l.verifyDirectoryContent(ctx, source, tempRoot); err != nil {
-		return fmt.Errorf("staged directory failed verification: %w", err)
-	}
-	if _, err := l.vfs.Stat(destination); err == nil {
-		return fmt.Errorf("move destination appeared before promotion")
-	} else if !IsNotFound(err) {
-		return fmt.Errorf("recheck destination before promotion: %w", err)
-	}
-	if err := features.DirMove(ctx, l.backend, tempRoot, destination); err != nil {
-		return fmt.Errorf("promote staged directory: %w", err)
-	}
-	l.vfs.FlushDirCache()
-	if err := l.verifyDirectoryContent(ctx, source, destination); err != nil {
-		return fmt.Errorf("promoted directory failed verification: %w", err)
-	}
-	return l.removeDirectoryTree(ctx, source, destination)
 }
 
 func (l *Library) removeDirectoryTree(ctx context.Context, root, verifiedDestination string) error {
@@ -868,7 +789,7 @@ func (l *Library) removeDirectoryTree(ctx context.Context, root, verifiedDestina
 	return nil
 }
 
-func (l *Library) moveFileVerified(ctx context.Context, features *fs.Features, source, destination string, expectedSize int64, recoverExisting bool) error {
+func (l *Library) recoverFileMove(ctx context.Context, source, destination string, expectedSize int64) error {
 	sourceObject, err := l.backend.NewObject(ctx, source)
 	if err != nil {
 		return fmt.Errorf("load move source object: %w", err)
@@ -877,13 +798,10 @@ func (l *Library) moveFileVerified(ctx context.Context, features *fs.Features, s
 		return fmt.Errorf("file move size verification unavailable for source")
 	}
 	if sourceObject.Size() != expectedSize {
-		return fmt.Errorf("move source size changed before copy: expected=%d actual=%d", expectedSize, sourceObject.Size())
+		return fmt.Errorf("move source size changed before recovery: expected=%d actual=%d", expectedSize, sourceObject.Size())
 	}
 	destinationObject, destinationErr := l.backend.NewObject(ctx, destination)
 	if destinationErr == nil {
-		if !recoverExisting {
-			return fmt.Errorf("move destination appeared before copy promotion")
-		}
 		if err := verifyObjectContent(ctx, sourceObject, destinationObject); err != nil {
 			return fmt.Errorf("existing destination does not verify against source: %w", err)
 		}
@@ -902,60 +820,7 @@ func (l *Library) moveFileVerified(ctx context.Context, features *fs.Features, s
 	if !IsNotFound(destinationErr) {
 		return fmt.Errorf("check move destination object: %w", destinationErr)
 	}
-	tempDigest := sha256.Sum256([]byte(source + "\x00" + destination))
-	temp := path.Join(path.Dir(destination), ".rcfin-move-"+hex.EncodeToString(tempDigest[:8])+".tmp")
-	temp, err = safeMutationPath(temp)
-	if err != nil {
-		return err
-	}
-	tempObject, tempErr := l.backend.NewObject(ctx, temp)
-	if tempErr == nil {
-		if err := verifyObjectContent(ctx, sourceObject, tempObject); err != nil {
-			return fmt.Errorf("staged temporary object does not verify: %w", err)
-		}
-	} else if IsNotFound(tempErr) {
-		tempObject, err = features.Copy(ctx, sourceObject, temp)
-		if err != nil {
-			return fmt.Errorf("stage verified file copy: %w", err)
-		}
-		if tempObject == nil {
-			tempObject, err = l.backend.NewObject(ctx, temp)
-			if err != nil {
-				return fmt.Errorf("load staged temporary object: %w", err)
-			}
-		}
-		if err := verifyObjectContent(ctx, sourceObject, tempObject); err != nil {
-			return fmt.Errorf("staged temporary object failed verification: %w", err)
-		}
-	} else {
-		return fmt.Errorf("check staged temporary object: %w", tempErr)
-	}
-	if _, err := l.backend.NewObject(ctx, destination); err == nil {
-		return fmt.Errorf("move destination appeared before promotion")
-	} else if !IsNotFound(err) {
-		return fmt.Errorf("recheck move destination before promotion: %w", err)
-	}
-	if _, err := features.Move(ctx, tempObject, destination); err != nil {
-		return fmt.Errorf("promote verified temporary file: %w", err)
-	}
-	finalObject, err := l.backend.NewObject(ctx, destination)
-	if err != nil {
-		return fmt.Errorf("load promoted destination for verification: %w", err)
-	}
-	if err := verifyObjectContent(ctx, sourceObject, finalObject); err != nil {
-		return fmt.Errorf("promoted destination failed verification: %w", err)
-	}
-	if err := sourceObject.Remove(ctx); err != nil {
-		return fmt.Errorf("remove source after destination verification: %w", err)
-	}
-	l.vfs.FlushDirCache()
-	if _, err := l.vfs.Stat(source); !IsNotFound(err) {
-		if err == nil {
-			return fmt.Errorf("source still exists after verified destination promotion")
-		}
-		return fmt.Errorf("verify source removal after destination promotion: %w", err)
-	}
-	return nil
+	return fmt.Errorf("destination is absent during file move recovery")
 }
 
 func verifyObjectContent(ctx context.Context, source, destination fs.Object) error {

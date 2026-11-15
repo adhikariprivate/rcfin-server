@@ -59,6 +59,12 @@ func TestPlanInboxShowsDoesNotTreatEpisodeVideoAsSidecar(t *testing.T) {
 	if len(report.Items) != 1 || report.Items[0].State != "planned" {
 		t.Fatalf("plan items = %#v, want one planned show", report.Items)
 	}
+	if report.Items[0].Operation != "backend_dir_move" {
+		t.Errorf("planned operation = %q, want backend_dir_move", report.Items[0].Operation)
+	}
+	if report.Items[0].PossibleCopyDelete == nil || *report.Items[0].PossibleCopyDelete {
+		t.Errorf("possible_copy_delete = %v, want false for local backend", report.Items[0].PossibleCopyDelete)
+	}
 	var videoMoves, subtitleMoves int
 	for _, file := range report.Items[0].Files {
 		if file.Action != "move_file" {

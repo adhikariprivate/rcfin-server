@@ -229,24 +229,6 @@ func planShowScope(ctx context.Context, coll *collection.Collection, p provider.
 		}
 		capabilities := coll.Storage.Capabilities()
 		item.Capabilities = capabilities
-		if capabilities.Local {
-			item.Operation = "local_dir_move"
-		} else {
-			item.Operation = "staged_copy_verify_dir_move"
-		}
-		if !capabilities.DirMove {
-			item.Operation = "unsupported"
-			item.State, item.Reason = "needs_review", "backend must advertise DirMove for TV directory normalization"
-			report.Items = append(report.Items, item)
-			continue
-		}
-		if !capabilities.Local && !capabilities.Copy {
-			item.Operation = "unsupported"
-			item.State, item.Reason = "needs_review", "remote directory moves require Copy for staging and destination verification"
-			item.PossibleCopyDelete = true
-			report.Items = append(report.Items, item)
-			continue
-		}
 		seasons := map[int][]provider.EpisodeMetadata{}
 		seasonNumbers := map[int]bool{}
 		for _, season := range seasonPaths[source] {
@@ -425,18 +407,40 @@ func planShowScope(ctx context.Context, coll *collection.Collection, p provider.
 				item.Files = append(item.Files, FilePlan{Action: "move_file", Source: currentPath, Destination: newPath, Role: sidecar.Role, ExpectedBytes: sidecar.Size, Reason: "keep sidecar associated with renamed episode"})
 			}
 		}
-		usesFileMove := false
+		usesFileMove, usesDirectoryMove := false, false
 		for _, file := range item.Files {
 			if file.Action == "move_file" {
 				usesFileMove = true
-				break
+			} else if strings.HasPrefix(file.Action, "move_directory:") {
+				usesDirectoryMove = true
 			}
 		}
-		if usesFileMove && (!capabilities.Move || (!capabilities.Copy && !capabilities.Local)) {
+		if usesDirectoryMove && !capabilities.DirMove {
 			item.Operation = "unsupported"
-			item.State, item.Reason = "needs_review", "file moves require Move and, for remote backends, Copy for verified staging"
+			item.State, item.Reason = "needs_review", "backend does not advertise DirMove; TV directory organization will not fall back to copy/delete"
 			report.Items = append(report.Items, item)
 			continue
+		}
+		if usesFileMove && !capabilities.Move {
+			item.Operation = "unsupported"
+			item.State, item.Reason = "needs_review", "backend does not advertise Move; TV file organization will not fall back to copy/delete"
+			report.Items = append(report.Items, item)
+			continue
+		}
+		if usesDirectoryMove {
+			item.Operation = "backend_dir_move"
+		} else if usesFileMove {
+			item.Operation = "backend_move"
+		} else {
+			item.Operation = "none"
+		}
+		if usesDirectoryMove || usesFileMove {
+			if capabilities.Local {
+				item.MoveSemantics = "local_rename"
+				item.PossibleCopyDelete = boolPointer(false)
+			} else {
+				item.MoveSemantics = "backend_defined"
+			}
 		}
 		collision := false
 		plannedActionTargets := map[string]bool{}
@@ -488,12 +492,6 @@ func planShowScope(ctx context.Context, coll *collection.Collection, p provider.
 			item.State, item.Reason = "unchanged", "show and episode paths already match the normalized layout"
 		} else {
 			item.State, item.Reason = "planned", "confident show and episode matches; dry-run plan only"
-		}
-		for _, file := range item.Files {
-			if file.Action == "move_directory" || file.Action == "move_file" || strings.HasPrefix(file.Action, "move_directory:") {
-				item.PossibleCopyDelete = !capabilities.Local
-				break
-			}
 		}
 		plannedDestinations[strings.ToLower(destination)] = source
 		report.Items = append(report.Items, item)

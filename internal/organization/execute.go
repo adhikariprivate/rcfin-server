@@ -85,9 +85,6 @@ func QueueExistingItemForInbox(ctx context.Context, coll *collection.Collection,
 	if !capabilities.DirMove {
 		return nil, fmt.Errorf("backend does not advertise DirMove")
 	}
-	if !capabilities.Local && !capabilities.Copy {
-		return nil, fmt.Errorf("remote staging requires advertised Copy for verified directory moves")
-	}
 	if !capabilities.Put {
 		return nil, fmt.Errorf("library VFS is read-only")
 	}
@@ -647,26 +644,6 @@ func runOperation(ctx context.Context, coll *collection.Collection, repo databas
 				operationErr = fmt.Errorf("recovered file destination size %d differs from journaled source size %d; operation needs review", destinationInfo.Size(), op.Bytes)
 				return finishOperation(ctx, repo, op, "needs_review", operationErr, time.Time{})
 			}
-			if strings.HasPrefix(op.Action, "move_file:") && op.Attempts > 1 {
-				if sourceInfo.Size() != op.Bytes || destinationInfo.Size() != op.Bytes || op.Checksum == "" {
-					operationErr = fmt.Errorf("source and destination files do not match the journaled move evidence; operation needs review")
-					return finishOperation(ctx, repo, op, "needs_review", operationErr, time.Time{})
-				}
-				sourceChecksum, sourceChecksumErr := coll.Storage.ContentChecksum(ctx, op.SourcePath)
-				destinationChecksum, destinationChecksumErr := coll.Storage.ContentChecksum(ctx, op.DestinationPath)
-				if sourceChecksumErr != nil || destinationChecksumErr != nil {
-					checkErr := sourceChecksumErr
-					if checkErr == nil {
-						checkErr = destinationChecksumErr
-					}
-					status, next := operationFailureState(checkErr, op.Attempts, now)
-					return finishOperation(ctx, repo, op, status, checkErr, next)
-				}
-				if sourceChecksum != op.Checksum || destinationChecksum != op.Checksum {
-					operationErr = fmt.Errorf("source and destination file checksums do not match the journaled move evidence; operation needs review")
-					return finishOperation(ctx, repo, op, "needs_review", operationErr, time.Time{})
-				}
-			}
 			if op.Checksum != "" {
 				destinationChecksum, checksumErr := coll.Storage.ContentChecksum(ctx, op.DestinationPath)
 				if checksumErr != nil {
@@ -716,6 +693,24 @@ func runOperation(ctx context.Context, coll *collection.Collection, repo databas
 				}
 				operationErr = coll.Storage.MoveDirectory(ctx, op.SourcePath, op.DestinationPath, true)
 			} else if strings.HasPrefix(op.Action, "move_file:") && op.Attempts > 1 {
+				if sourceInfo.Size() != op.Bytes || destinationInfo.Size() != op.Bytes || op.Checksum == "" {
+					operationErr = fmt.Errorf("source and destination files do not match the journaled move evidence; operation needs review")
+					return finishOperation(ctx, repo, op, "needs_review", operationErr, time.Time{})
+				}
+				sourceChecksum, sourceChecksumErr := coll.Storage.ContentChecksum(ctx, op.SourcePath)
+				destinationChecksum, destinationChecksumErr := coll.Storage.ContentChecksum(ctx, op.DestinationPath)
+				if sourceChecksumErr != nil || destinationChecksumErr != nil {
+					checkErr := sourceChecksumErr
+					if checkErr == nil {
+						checkErr = destinationChecksumErr
+					}
+					status, next := operationFailureState(checkErr, op.Attempts, now)
+					return finishOperation(ctx, repo, op, status, checkErr, next)
+				}
+				if sourceChecksum != op.Checksum || destinationChecksum != op.Checksum {
+					operationErr = fmt.Errorf("source and destination file checksums do not match the journaled move evidence; operation needs review")
+					return finishOperation(ctx, repo, op, "needs_review", operationErr, time.Time{})
+				}
 				operationErr = coll.Storage.MoveFile(ctx, op.SourcePath, op.DestinationPath, true)
 			} else {
 				operationErr = fmt.Errorf("source and destination both exist; operation needs review")

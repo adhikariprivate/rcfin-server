@@ -77,9 +77,10 @@ type ItemPlan struct {
 	Evidence     []string         `json:"evidence,omitempty"`
 	Operation    string           `json:"operation,omitempty"`
 	Capabilities CapabilityReport `json:"capabilities,omitempty"`
-	// PossibleCopyDelete reports that a remote operation may copy data and
-	// delete its source, including RCFin's explicitly staged verified workflow.
-	PossibleCopyDelete bool       `json:"possible_copy_delete,omitempty"`
+	// PossibleCopyDelete is nil when Rclone does not expose whether a backend's
+	// Move or DirMove is implemented as server-side rename or copy/delete.
+	PossibleCopyDelete *bool      `json:"possible_copy_delete"`
+	MoveSemantics      string     `json:"move_semantics,omitempty"`
 	State              string     `json:"state"`
 	Reason             string     `json:"reason,omitempty"`
 	Files              []FilePlan `json:"files,omitempty"`
@@ -314,29 +315,6 @@ func planMovieScope(ctx context.Context, coll *collection.Collection, p provider
 		planned[strings.ToLower(destination)] = sourceDir
 		capabilities := coll.Storage.Capabilities()
 		plan.Capabilities = capabilities
-		// Rclone's optional operation flags do not promise provider-level
-		// atomicity. An advertised server-side move may itself copy then delete.
-		if capabilities.DirMove {
-			if capabilities.Local {
-				plan.Operation = "local_dir_move"
-			} else {
-				plan.Operation = "staged_copy_verify_dir_move"
-			}
-		} else {
-			plan.Operation = "unsupported"
-			plan.State = "needs_review"
-			plan.Reason = "backend does not advertise DirMove; directory organization will not fall back to copy/delete"
-			report.Items = append(report.Items, plan)
-			continue
-		}
-		if !capabilities.Local && !capabilities.Copy {
-			plan.Operation = "unsupported"
-			plan.State = "needs_review"
-			plan.PossibleCopyDelete = true
-			plan.Reason = "remote directory moves require Copy for staging and destination verification"
-			report.Items = append(report.Items, plan)
-			continue
-		}
 		// A directory move preserves sidecars and extras. Video renames are then
 		// planned only when parsed quality/version labels keep each target unique.
 		if sourceDir != destination {
@@ -397,19 +375,44 @@ func planMovieScope(ctx context.Context, coll *collection.Collection, p provider
 				}
 			}
 		}
-		usesFileMove := false
+		usesFileMove, usesDirectoryMove := false, false
 		for _, file := range plan.Files {
 			if file.Action == "move_file" {
 				usesFileMove = true
-				break
+			} else if file.Action == "move_directory" || strings.HasPrefix(file.Action, "move_directory:") {
+				usesDirectoryMove = true
 			}
 		}
-		if usesFileMove && (!capabilities.Move || (!capabilities.Copy && !capabilities.Local)) {
+		if usesDirectoryMove && !capabilities.DirMove {
 			plan.State = "needs_review"
 			plan.Operation = "unsupported"
-			plan.Reason = "file moves require Move and, for remote backends, Copy for verified staging"
+			plan.Reason = "backend does not advertise DirMove; directory organization will not fall back to copy/delete"
 			report.Items = append(report.Items, plan)
 			continue
+		}
+		if usesFileMove && !capabilities.Move {
+			plan.State = "needs_review"
+			plan.Operation = "unsupported"
+			plan.Reason = "backend does not advertise Move; file organization will not fall back to copy/delete"
+			report.Items = append(report.Items, plan)
+			continue
+		}
+		if usesDirectoryMove {
+			plan.Operation = "backend_dir_move"
+		} else if usesFileMove {
+			plan.Operation = "backend_move"
+		} else {
+			plan.Operation = "none"
+		}
+		if usesDirectoryMove || usesFileMove {
+			if capabilities.Local {
+				plan.MoveSemantics = "local_rename"
+				plan.PossibleCopyDelete = boolPointer(false)
+			} else {
+				// Rclone exposes no generic field describing whether a backend's
+				// Move/DirMove uses server-side rename or copy/delete.
+				plan.MoveSemantics = "backend_defined"
+			}
 		}
 		collision := false
 		for _, file := range plan.Files {
@@ -436,12 +439,6 @@ func planMovieScope(ctx context.Context, coll *collection.Collection, p provider
 				plan.Reason = "confident movie match; dry-run plan only"
 			}
 		}
-		for _, file := range plan.Files {
-			if file.Action == "move_directory" || file.Action == "move_file" || strings.HasPrefix(file.Action, "move_directory:") {
-				plan.PossibleCopyDelete = !capabilities.Local
-				break
-			}
-		}
 		report.Items = append(report.Items, plan)
 		if plan.State == "planned" {
 			for _, file := range plan.Files {
@@ -453,6 +450,8 @@ func planMovieScope(ctx context.Context, coll *collection.Collection, p provider
 	}
 	return report, nil
 }
+
+func boolPointer(value bool) *bool { return &value }
 
 func stableItemIDAtPath(coll *collection.Collection, itemPath string) string {
 	if coll == nil {
