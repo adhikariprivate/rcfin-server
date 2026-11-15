@@ -270,12 +270,14 @@ setting disabled. Existing-path normalization additionally requires
 `media.normalize_existing.enabled`. `rcfin library retry LIBRARY ITEM_KEY
 ACTION` retries a failed journal operation. The running server recovers queued
 operations during its next library cycle. When a unique move cannot be inferred,
-review the source and destination with status, then explicitly accept one
-fingerprint-matching video file with `rcfin library item adopt-move LIBRARY
---from OLD_PATH --to NEW_PATH`. This updates catalog identity and journal paths;
-it does not move remote files. `rcfin library scan LIBRARY --full`
-is an explicit full remote listing; ordinary scans already reconcile a full
-listing, and scans do not imply provider refresh.
+review the source and destination with status, then explicitly accept a
+fingerprint-matching video file or a directory whose complete descendant tree
+matches with `rcfin library item adopt-move LIBRARY --from OLD_PATH --to
+NEW_PATH`. Directory adoption carries all matching descendants and their
+processing state. This updates catalog identity and journal paths; it does not
+move remote files. `rcfin library scan LIBRARY [--full]` always reconciles a
+complete remote listing; `--full` is explicit for scripts, and scans do not
+imply provider refresh.
 
 Workers renew active media-operation leases during long provider or storage
 work. If a repository reports that a worker no longer owns a lease, its
