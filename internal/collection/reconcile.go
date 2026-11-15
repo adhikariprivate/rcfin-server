@@ -35,16 +35,19 @@ type InventoryChange struct {
 }
 
 type InventoryReconciliation struct {
-	Generation       int64             `json:"generation"`
-	Completed        time.Time         `json:"completed_at"`
-	Changes          []InventoryChange `json:"changes"`
-	AlgorithmChanges []string          `json:"algorithm_changes,omitempty"`
+	Generation         int64             `json:"generation"`
+	Completed          time.Time         `json:"completed_at"`
+	ListingMode        string            `json:"listing_mode,omitempty"`
+	BackendIDsObserved int               `json:"backend_ids_observed,omitempty"`
+	Changes            []InventoryChange `json:"changes"`
+	AlgorithmChanges   []string          `json:"algorithm_changes,omitempty"`
 }
 
 type InventoryProcessingVersions struct {
 	ServerVersion     string
 	AlgorithmVersions map[string]int
 	MissingGrace      time.Duration
+	ListingMode       string
 }
 
 // ReconcileLibraryInventory persists a complete inventory only after the
@@ -63,6 +66,7 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 	}
 	current := make([]model.LibraryInventoryEntry, 0, len(inventory))
 	entriesByPath := make(map[string]InventoryEntry, len(inventory))
+	backendIDsObserved := 0
 	for _, entry := range inventory {
 		if entry.Path == "" {
 			return InventoryReconciliation{}, fmt.Errorf("inventory contains an empty path")
@@ -71,6 +75,9 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 			return InventoryReconciliation{}, fmt.Errorf("inventory contains duplicate path %q", entry.Path)
 		}
 		entriesByPath[entry.Path] = entry
+		if entry.BackendID != "" {
+			backendIDsObserved++
+		}
 		persisted := persistedInventoryEntry(entry)
 		current = append(current, persisted)
 	}
@@ -299,11 +306,11 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 		return changes[i].Path < changes[j].Path
 	})
 
-	snapshot := &model.LibraryInventorySnapshot{CollectionID: collectionID, CompletedAt: completed.UTC(), ServerVersion: processingVersions.ServerVersion, AlgorithmVersions: processingVersions.AlgorithmVersions, Entries: current}
+	snapshot := &model.LibraryInventorySnapshot{CollectionID: collectionID, CompletedAt: completed.UTC(), ServerVersion: processingVersions.ServerVersion, AlgorithmVersions: processingVersions.AlgorithmVersions, ListingMode: processingVersions.ListingMode, BackendIDsObserved: backendIDsObserved, Entries: current}
 	if err := repo.SaveLibraryInventory(ctx, snapshot); err != nil {
 		return InventoryReconciliation{}, fmt.Errorf("save completed inventory: %w", err)
 	}
-	return InventoryReconciliation{Generation: snapshot.Generation, Completed: snapshot.CompletedAt, Changes: changes, AlgorithmChanges: algorithmChanges}, nil
+	return InventoryReconciliation{Generation: snapshot.Generation, Completed: snapshot.CompletedAt, ListingMode: snapshot.ListingMode, BackendIDsObserved: snapshot.BackendIDsObserved, Changes: changes, AlgorithmChanges: algorithmChanges}, nil
 }
 
 func inventoryEntryWasMissing(entry model.LibraryInventoryEntry) bool {

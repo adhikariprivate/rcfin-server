@@ -17,6 +17,7 @@ import (
 	"github.com/adhikariprivate/rcfin-server/internal/metadata/provider"
 	metadatarefresh "github.com/adhikariprivate/rcfin-server/internal/metadata/refresh"
 	"github.com/adhikariprivate/rcfin-server/internal/organization"
+	"github.com/adhikariprivate/rcfin-server/internal/rclonestore"
 	"github.com/adhikariprivate/rcfin-server/internal/subtitles"
 )
 
@@ -52,8 +53,11 @@ func currentInventoryProcessingVersions() collection.InventoryProcessingVersions
 	}
 }
 
-func inventoryVersionsForLibrary(library collectionConfig) collection.InventoryProcessingVersions {
+func inventoryVersionsForLibrary(library collectionConfig, storage ...*rclonestore.Library) collection.InventoryProcessingVersions {
 	versions := currentInventoryProcessingVersions()
+	if len(storage) > 0 && storage[0] != nil {
+		versions.ListingMode = storage[0].InventoryListingMode()
+	}
 	if value := strings.TrimSpace(library.Media.MissingGrace); value != "" {
 		if parsed, err := time.ParseDuration(value); err == nil && parsed > 0 {
 			versions.MissingGrace = parsed
@@ -138,14 +142,14 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 	if err != nil {
 		return fmt.Errorf("inventory: %w", err)
 	}
-	reconciliation, err := collection.ReconcileLibraryInventory(ctx, db, library.ID, inventory, time.Now().UTC(), inventoryVersionsForLibrary(library))
+	reconciliation, err := collection.ReconcileLibraryInventory(ctx, db, library.ID, inventory, time.Now().UTC(), inventoryVersionsForLibrary(library, coll.Storage))
 	if err != nil {
 		return fmt.Errorf("reconcile inventory: %w", err)
 	}
 	if err := relinkMovedMediaOperations(ctx, db, library.ID, coll.Type, reconciliation.Changes, inventory); err != nil {
 		return fmt.Errorf("relink moved media operations: %w", err)
 	}
-	log.Printf("library scan %q generation=%d entries=%d changes=%d", library.ID, reconciliation.Generation, len(inventory), len(reconciliation.Changes))
+	log.Printf("library scan %q generation=%d entries=%d changes=%d listing=%s backend_ids=%d", library.ID, reconciliation.Generation, len(inventory), len(reconciliation.Changes), reconciliation.ListingMode, reconciliation.BackendIDsObserved)
 	if err := collections.RefreshCollectionWithInventory(ctx, library.ID, inventory); err != nil {
 		return fmt.Errorf("refresh Jellyfin library model: %w", err)
 	}
@@ -610,7 +614,7 @@ func rescanAfterMediaMutation(ctx context.Context, collections *collection.Colle
 	if err != nil {
 		return nil, collection.InventoryReconciliation{}, err
 	}
-	reconciliation, err := collection.ReconcileLibraryInventory(ctx, db, library.ID, inventory, time.Now().UTC(), inventoryVersionsForLibrary(library))
+	reconciliation, err := collection.ReconcileLibraryInventory(ctx, db, library.ID, inventory, time.Now().UTC(), inventoryVersionsForLibrary(library, coll.Storage))
 	if err != nil {
 		return nil, collection.InventoryReconciliation{}, err
 	}

@@ -79,6 +79,7 @@ type Library struct {
 type Capabilities struct {
 	Move           bool `json:"move"`
 	DirMove        bool `json:"dir_move"`
+	RecursiveList  bool `json:"recursive_list"`
 	Put            bool `json:"put"`
 	PutStream      bool `json:"put_stream"`
 	Copy           bool `json:"copy"`
@@ -106,12 +107,26 @@ func (l *Library) Capabilities() Capabilities {
 	return Capabilities{
 		Move:           f.Move != nil,
 		DirMove:        f.DirMove != nil,
+		RecursiveList:  f.ListR != nil,
 		Put:            !l.vfs.Opt.ReadOnly,
 		PutStream:      f.PutStream != nil,
 		Copy:           f.Copy != nil,
 		Local:          f.IsLocal,
 		SameFilesystem: true,
 	}
+}
+
+// InventoryListingMode reports which Rclone listing path a full inventory
+// will use. Recursive listing is preferred only when the backend advertises it.
+func (l *Library) InventoryListingMode() string {
+	if l == nil || l.backend == nil {
+		return "unavailable"
+	}
+	features := l.backend.Features()
+	if features != nil && features.ListR != nil {
+		return "rclone_recursive"
+	}
+	return "directory_walk"
 }
 
 // New creates an rclone-backed library rooted at remote, for example

@@ -36,6 +36,9 @@ func TestListRecursiveFallsBackWhenBackendDoesNotSupportIt(t *testing.T) {
 	} else if supported || entries != nil {
 		t.Fatalf("local backend listing = (%#v, %v), want unsupported fallback", entries, supported)
 	}
+	if mode := library.InventoryListingMode(); mode != "directory_walk" {
+		t.Fatalf("local inventory listing mode = %q, want directory_walk", mode)
+	}
 
 	// Simulate a backend that advertises ListR, since the local backend used
 	// above intentionally exercises the caller's recursive directory-walk path.
@@ -48,6 +51,9 @@ func TestListRecursiveFallsBackWhenBackendDoesNotSupportIt(t *testing.T) {
 		})
 	}
 	library.backend = recursiveFsWrapper{Fs: library.backend, features: &features}
+	if mode := library.InventoryListingMode(); mode != "rclone_recursive" {
+		t.Fatalf("advertised inventory listing mode = %q, want rclone_recursive", mode)
+	}
 	entries, supported, err := library.ListRecursive(context.Background())
 	if err != nil {
 		t.Fatal(err)

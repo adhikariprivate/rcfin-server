@@ -153,7 +153,7 @@ func runLibraryItemCommand(ctx context.Context, repo database.Repository, config
 	if err != nil {
 		return fmt.Errorf("inventory library: %w", err)
 	}
-	if _, err := collection.ReconcileLibraryInventory(ctx, repo, libraryID, inventory, time.Now().UTC(), inventoryVersionsForLibrary(*selected)); err != nil {
+	if _, err := collection.ReconcileLibraryInventory(ctx, repo, libraryID, inventory, time.Now().UTC(), inventoryVersionsForLibrary(*selected, storage)); err != nil {
 		return fmt.Errorf("reconcile before move adoption: %w", err)
 	}
 	snapshot, err := repo.GetLibraryInventory(ctx, libraryID)
@@ -168,7 +168,7 @@ func runLibraryItemCommand(ctx context.Context, repo database.Repository, config
 	}
 	moves := make([]collection.InventoryChange, 0)
 	for _, entry := range snapshot.Entries {
-		if !entry.MoveRelinkPending || entry.Path != *toPath && !strings.HasPrefix(entry.Path, *toPath+"/") {
+		if !entry.MoveRelinkPending || entry.PreviousPath == "" || entry.Path != *toPath && !strings.HasPrefix(entry.Path, *toPath+"/") {
 			continue
 		}
 		moves = append(moves, collection.InventoryChange{Kind: collection.InventoryMoved, OldPath: entry.PreviousPath, Path: entry.Path})
@@ -499,7 +499,7 @@ func runLibraryRefreshCommand(ctx context.Context, repo database.Repository, con
 	if err != nil {
 		return fmt.Errorf("inventory library: %w", err)
 	}
-	reconciliation, err := collection.ReconcileLibraryInventory(ctx, repo, libraryID, inventory, time.Now().UTC(), inventoryVersionsForLibrary(*selected))
+	reconciliation, err := collection.ReconcileLibraryInventory(ctx, repo, libraryID, inventory, time.Now().UTC(), inventoryVersionsForLibrary(*selected, storage))
 	if err != nil {
 		return fmt.Errorf("save inventory snapshot: %w", err)
 	}
@@ -719,7 +719,7 @@ func runLibraryScanCommand(ctx context.Context, repo database.Repository, config
 	if err != nil {
 		return fmt.Errorf("inventory library: %w", err)
 	}
-	reconciliation, err := collection.ReconcileLibraryInventory(ctx, repo, selected.ID, entries, time.Now().UTC(), inventoryVersionsForLibrary(*selected))
+	reconciliation, err := collection.ReconcileLibraryInventory(ctx, repo, selected.ID, entries, time.Now().UTC(), inventoryVersionsForLibrary(*selected, storage))
 	if err != nil {
 		return fmt.Errorf("reconcile library inventory: %w", err)
 	}

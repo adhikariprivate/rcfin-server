@@ -79,6 +79,23 @@ func TestReconcileLibraryInventoryBootstrapsExistingLibraryWithoutEnrichment(t *
 	}
 }
 
+func TestReconcilePersistsListingAndBackendIDEvidence(t *testing.T) {
+	repo := &memoryInventoryRepo{}
+	result, err := ReconcileLibraryInventory(context.Background(), repo, "movies", []InventoryEntry{
+		{Path: "Film", Scope: InventoryScopeLibrary, Role: InventoryOther, IsDir: true},
+		{Path: "Film/Movie.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, BackendID: "object-7"},
+	}, time.Unix(100, 0), InventoryProcessingVersions{ListingMode: "rclone_recursive"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ListingMode != "rclone_recursive" || result.BackendIDsObserved != 1 {
+		t.Fatalf("scan evidence = %#v", result)
+	}
+	if repo.snapshot.ListingMode != result.ListingMode || repo.snapshot.BackendIDsObserved != 1 {
+		t.Fatalf("scan evidence was not persisted: %#v", repo.snapshot)
+	}
+}
+
 func TestReconcileLibraryInventoryRecognizesUniqueRenameAndDuplicateAmbiguity(t *testing.T) {
 	repo := &memoryInventoryRepo{snapshot: &model.LibraryInventorySnapshot{Generation: 1, Entries: []model.LibraryInventoryEntry{
 		{Path: "old/movie.mkv", Scope: InventoryScopeLibrary, Role: string(InventoryVideo), Size: 100, ModTime: 20, Fingerprint: "fp", Identity: "tmdb=42"},
