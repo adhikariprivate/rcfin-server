@@ -35,6 +35,7 @@ type LibraryInventorySnapshot struct {
 	AlgorithmVersions       map[string]int          `json:"algorithm_versions,omitempty"`
 	ConfigurationSignatures map[string]string       `json:"configuration_signatures,omitempty"`
 	ListingMode             string                  `json:"listing_mode,omitempty"`
+	FingerprintMode         string                  `json:"fingerprint_mode,omitempty"`
 	BackendIDsObserved      int                     `json:"backend_ids_observed,omitempty"`
 	Entries                 []LibraryInventoryEntry `json:"entries"`
 }

@@ -91,10 +91,10 @@ func TestReconcilePersistsListingAndBackendIDEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ListingMode != "rclone_recursive" || result.BackendIDsObserved != 1 {
+	if result.ListingMode != "rclone_recursive" || result.FingerprintMode != inventoryFingerprintMode || result.BackendIDsObserved != 1 {
 		t.Fatalf("scan evidence = %#v", result)
 	}
-	if repo.snapshot.ListingMode != result.ListingMode || repo.snapshot.BackendIDsObserved != 1 {
+	if repo.snapshot.ListingMode != result.ListingMode || repo.snapshot.FingerprintMode != inventoryFingerprintMode || repo.snapshot.BackendIDsObserved != 1 {
 		t.Fatalf("scan evidence was not persisted: %#v", repo.snapshot)
 	}
 }

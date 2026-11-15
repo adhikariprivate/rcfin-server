@@ -27,6 +27,7 @@ const (
 )
 
 const defaultInventoryMissingGrace = 7 * 24 * time.Hour
+const inventoryFingerprintMode = "path_role_size_modtime_parsed_identity_for_moves"
 
 type InventoryChange struct {
 	Kind          InventoryChangeKind          `json:"kind"`
@@ -40,6 +41,7 @@ type InventoryReconciliation struct {
 	Generation           int64             `json:"generation"`
 	Completed            time.Time         `json:"completed_at"`
 	ListingMode          string            `json:"listing_mode,omitempty"`
+	FingerprintMode      string            `json:"fingerprint_mode,omitempty"`
 	BackendIDsObserved   int               `json:"backend_ids_observed,omitempty"`
 	Changes              []InventoryChange `json:"changes"`
 	AlgorithmChanges     []string          `json:"algorithm_changes,omitempty"`
@@ -421,11 +423,11 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 			storedServerVersion = previous.ServerVersion
 		}
 	}
-	snapshot := &model.LibraryInventorySnapshot{CollectionID: collectionID, CompletedAt: completed.UTC(), ServerVersion: storedServerVersion, AlgorithmVersions: storedAlgorithms, ConfigurationSignatures: storedSignatures, ListingMode: processingVersions.ListingMode, BackendIDsObserved: backendIDsObserved, Entries: current}
+	snapshot := &model.LibraryInventorySnapshot{CollectionID: collectionID, CompletedAt: completed.UTC(), ServerVersion: storedServerVersion, AlgorithmVersions: storedAlgorithms, ConfigurationSignatures: storedSignatures, ListingMode: processingVersions.ListingMode, FingerprintMode: inventoryFingerprintMode, BackendIDsObserved: backendIDsObserved, Entries: current}
 	if err := repo.SaveLibraryInventory(ctx, snapshot); err != nil {
 		return InventoryReconciliation{}, fmt.Errorf("save completed inventory: %w", err)
 	}
-	return InventoryReconciliation{Generation: snapshot.Generation, Completed: snapshot.CompletedAt, ListingMode: snapshot.ListingMode, BackendIDsObserved: snapshot.BackendIDsObserved, Changes: changes, AlgorithmChanges: algorithmChanges, ConfigurationChanges: configurationChanges}, nil
+	return InventoryReconciliation{Generation: snapshot.Generation, Completed: snapshot.CompletedAt, ListingMode: snapshot.ListingMode, FingerprintMode: snapshot.FingerprintMode, BackendIDsObserved: snapshot.BackendIDsObserved, Changes: changes, AlgorithmChanges: algorithmChanges, ConfigurationChanges: configurationChanges}, nil
 }
 
 func containsStringValue(values []string, target string) bool {
