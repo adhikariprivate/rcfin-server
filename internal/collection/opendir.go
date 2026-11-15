@@ -5,6 +5,7 @@ package collection
 import (
 	"errors"
 	"os"
+	"path"
 	"sort"
 	"strings"
 	"time"
@@ -33,32 +34,44 @@ func OpenDir(store *rclonestore.Library, name string) (*Dir, error) {
 	return &Dir{store: store, name: name}, nil
 }
 
-// OpenInventoryDir builds an in-memory directory view from the completed
-// library snapshot. It avoids a second Rclone listing while the Jellyfin model
-// is rebuilt after an inventory cycle.
-func OpenInventoryDir(name string, inventory []InventoryEntry) *Dir {
-	children := map[string]FileInfo{}
-	prefix := strings.Trim(strings.TrimSpace(name), "/")
-	if prefix != "" {
-		prefix += "/"
+// InventoryDirectoryIndex provides sorted directory views from one inventory
+// snapshot, avoiding repeated remote listings and repeated full-snapshot scans.
+type InventoryDirectoryIndex struct {
+	children map[string]map[string]FileInfo
+}
+
+func NewInventoryDirectoryIndex(inventory []InventoryEntry) *InventoryDirectoryIndex {
+	index := &InventoryDirectoryIndex{children: map[string]map[string]FileInfo{".": {}}}
+	add := func(parent string, child FileInfo) {
+		if index.children[parent] == nil {
+			index.children[parent] = map[string]FileInfo{}
+		}
+		if existing, ok := index.children[parent][child.Name()]; ok && existing.IsDir() && !child.IsDir() {
+			return
+		}
+		index.children[parent][child.Name()] = child
 	}
 	for _, entry := range inventory {
-		if !strings.HasPrefix(entry.Path, prefix) {
+		clean := path.Clean(strings.TrimSpace(entry.Path))
+		if clean == "" || clean == "." || path.IsAbs(clean) || strings.HasPrefix(clean, "../") {
 			continue
 		}
-		relative := strings.TrimPrefix(entry.Path, prefix)
-		if relative == "" {
-			continue
+		parent, base := path.Dir(clean), path.Base(clean)
+		add(parent, FileInfo{info: inventoryFileInfo{name: base, size: entry.Size, modTime: time.Unix(0, entry.ModTime), isDir: entry.IsDir}})
+		for ancestor := parent; ancestor != "." && ancestor != "/"; ancestor = path.Dir(ancestor) {
+			ancestorParent, ancestorName := path.Dir(ancestor), path.Base(ancestor)
+			add(ancestorParent, FileInfo{info: inventoryFileInfo{name: ancestorName, isDir: true}})
 		}
-		first, _, hasNested := strings.Cut(relative, "/")
-		if hasNested {
-			if _, exists := children[first]; !exists {
-				children[first] = FileInfo{info: inventoryFileInfo{name: first, isDir: true}}
-			}
-			continue
-		}
-		children[first] = FileInfo{info: inventoryFileInfo{name: first, size: entry.Size, modTime: time.Unix(0, entry.ModTime), isDir: entry.IsDir}}
 	}
+	return index
+}
+
+func (index *InventoryDirectoryIndex) OpenDir(name string) *Dir {
+	clean := path.Clean(strings.Trim(strings.TrimSpace(name), "/"))
+	if clean == "" {
+		clean = "."
+	}
+	children := index.children[clean]
 	names := make([]string, 0, len(children))
 	for child := range children {
 		names = append(names, child)
@@ -68,7 +81,13 @@ func OpenInventoryDir(name string, inventory []InventoryEntry) *Dir {
 	for _, child := range names {
 		entries = append(entries, children[child])
 	}
-	return &Dir{name: name, entries: entries, read: true}
+	return &Dir{name: clean, entries: entries, read: true}
+}
+
+// OpenInventoryDir is a convenience for callers that need one view. Library
+// model rebuilds should construct and reuse an InventoryDirectoryIndex.
+func OpenInventoryDir(name string, inventory []InventoryEntry) *Dir {
+	return NewInventoryDirectoryIndex(inventory).OpenDir(name)
 }
 
 type inventoryFileInfo struct {
