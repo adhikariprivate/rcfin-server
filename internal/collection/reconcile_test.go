@@ -227,6 +227,30 @@ func TestReconcileLibraryInventoryOnlyInvalidatesWhenBuildAndAlgorithmBothChange
 	}
 }
 
+func TestAdoptInventoryDirectoryMoveCarriesVerifiedSubtree(t *testing.T) {
+	missingAt := time.Unix(100, 0).UTC()
+	snapshot := &model.LibraryInventorySnapshot{Generation: 9, Entries: []model.LibraryInventoryEntry{
+		{Path: "Old", Scope: InventoryScopeLibrary, Role: string(InventoryOther), IsDir: true, Fingerprint: "old-dir", TreeFingerprint: "tree", MissingSince: &missingAt},
+		{Path: "Old/Movie.mkv", Scope: InventoryScopeLibrary, Role: string(InventoryVideo), Fingerprint: "movie-fp", Identity: "tmdb=42", Size: 100, MissingSince: &missingAt},
+		{Path: "New", Scope: InventoryScopeLibrary, Role: string(InventoryOther), IsDir: true, Fingerprint: "new-dir", TreeFingerprint: "tree"},
+		{Path: "New/Movie.mkv", Scope: InventoryScopeLibrary, Role: string(InventoryVideo), Fingerprint: "movie-fp", Size: 100},
+	}}
+	if err := AdoptInventoryMove(snapshot, "Old", "New"); err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Entries) != 2 {
+		t.Fatalf("adopted snapshot retained unexpected paths: %#v", snapshot.Entries)
+	}
+	for _, entry := range snapshot.Entries {
+		if strings.HasPrefix(entry.Path, "Old") || entry.Classification != string(InventoryMoved) || entry.PreviousPath == "" || !entry.MoveRelinkPending {
+			t.Fatalf("subtree entry was not relinked: %#v", entry)
+		}
+		if entry.Path == "New/Movie.mkv" && (entry.Identity != "tmdb=42" || entry.FirstSeenGeneration != 9 || entry.MissingSince != nil) {
+			t.Fatalf("media identity/state was not carried forward: %#v", entry)
+		}
+	}
+}
+
 func TestReconcileLibraryInventoryRetainsMissingTombstoneAndClearsOnReappearance(t *testing.T) {
 	repo := &memoryInventoryRepo{snapshot: &model.LibraryInventorySnapshot{Generation: 1, Entries: []model.LibraryInventoryEntry{{
 		Path: "Film/movie.mkv", Scope: InventoryScopeLibrary, Role: string(InventoryVideo), Size: 10, ModTime: 20, Fingerprint: "fp",
