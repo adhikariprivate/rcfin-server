@@ -322,6 +322,20 @@ func (s *Server) addItem(t *requestTree, c collection.Collection, cfg LibraryCon
 		}
 		video := &node{name: filename, size: size, modTime: time.Now().UTC(), open: func() (http.File, error) { return c.Storage.OpenFile(source) }}
 		t.add(dir, video)
+		for _, subtitle := range collection.SidecarSubtitles(item) {
+			subtitleSource := path.Join(sourceDir, subtitle.Path)
+			subtitleSize := int64(0)
+			if inventory := t.locations[c.ID]; inventory != nil {
+				entry, found := inventory[subtitleSource]
+				if !found || entry.Scope != "library" || entry.Role != string(collection.InventorySubtitle) || entry.IsDir || entry.MissingSince != nil {
+					continue
+				}
+				subtitleSource, subtitleSize = entry.Path, entry.Size
+			}
+			subtitleName := virtualSubtitleName(filename, sourceFile, subtitle.Path)
+			src := subtitleSource
+			t.add(dir, &node{name: subtitleName, size: subtitleSize, modTime: time.Now().UTC(), open: func() (http.File, error) { return c.Storage.OpenFile(src) }})
+		}
 		if !cfg.ShowNFO && !cfg.ShowArtwork {
 			continue
 		}
@@ -357,6 +371,17 @@ func (s *Server) addItem(t *requestTree, c collection.Collection, cfg LibraryCon
 			}
 		}
 	}
+}
+
+func virtualSubtitleName(videoName, sourceVideo, sourceSubtitle string) string {
+	sourceStem := strings.TrimSuffix(path.Base(sourceVideo), path.Ext(sourceVideo))
+	subtitleBase := strings.TrimSuffix(path.Base(sourceSubtitle), path.Ext(sourceSubtitle))
+	suffix := ""
+	if strings.HasPrefix(subtitleBase, sourceStem) {
+		suffix = strings.TrimPrefix(subtitleBase, sourceStem)
+	}
+	name := strings.TrimSuffix(videoName, path.Ext(videoName)) + suffix + path.Ext(sourceSubtitle)
+	return safeName(name)
 }
 
 func (s *Server) addShowSidecars(t *requestTree, c collection.Collection, cfg LibraryConfig, dir *node, show *collection.Show) {

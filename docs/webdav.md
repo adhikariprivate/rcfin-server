@@ -64,7 +64,9 @@ movie files use `{title} ({year}).{ext}`, and episode files use
 `{series} - S{season:02}E{episode:02} - {episode_title}.{ext}`. Provider ID
 suffixes are removed from display names. Episodes and their NFO files appear
 directly in the season folder. Season folders are labeled `Season 01`,
-`Season 02`, and so on; season zero is labeled `Specials`.
+`Season 02`, and so on; season zero is labeled `Specials`. Existing SRT and VTT
+subtitles appear beside the corresponding video, with their language and track
+suffixes carried onto the virtual video filename so clients can associate them.
 
 ## Directory layout
 

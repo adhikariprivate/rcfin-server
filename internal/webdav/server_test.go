@@ -63,6 +63,9 @@ func TestShowUsesReadableSeasonFolderAndEpisodeSidecars(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(seasonPath, "Example Show S01E01 Pilot.nfo"), []byte(`<episodedetails><title>Pilot</title><season>1</season><episode>1</episode></episodedetails>`), 0644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(seasonPath, "Example Show S01E01 Pilot.en.srt"), []byte("1\n00:00:01,000 --> 00:00:02,000\nHello episode\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(seasonPath, "poster.jpg"), []byte("poster bytes"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +104,7 @@ func TestShowUsesReadableSeasonFolderAndEpisodeSidecars(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"Season 01", "Example Show - S01E01 - Pilot.mkv", "Example Show - S01E01 - Pilot.nfo", "season.nfo", "poster.jpg"} {
+	for _, expected := range []string{"Season 01", "Example Show - S01E01 - Pilot.mkv", "Example Show - S01E01 - Pilot.en.srt", "Example Show - S01E01 - Pilot.nfo", "season.nfo", "poster.jpg"} {
 		if listingResponse.Code != 207 || !strings.Contains(listingBody, expected) {
 			t.Fatalf("season listing missing %q (status %d): %s", expected, listingResponse.Code, listingResponse.Body.String())
 		}
@@ -109,6 +112,10 @@ func TestShowUsesReadableSeasonFolderAndEpisodeSidecars(t *testing.T) {
 	video := request(http.MethodGet, season+"/Example%20Show%20-%20S01E01%20-%20Pilot.mkv")
 	if video.Code != http.StatusOK || video.Body.String() != "episode bytes" {
 		t.Fatalf("episode GET = %d %q", video.Code, video.Body.String())
+	}
+	subtitle := request(http.MethodGet, season+"/Example%20Show%20-%20S01E01%20-%20Pilot.en.srt")
+	if subtitle.Code != http.StatusOK || !strings.Contains(subtitle.Body.String(), "Hello episode") {
+		t.Fatalf("episode subtitle GET = %d %q", subtitle.Code, subtitle.Body.String())
 	}
 	poster := request(http.MethodGet, season+"/poster.jpg")
 	if poster.Code != http.StatusOK || poster.Body.String() != "poster bytes" {
@@ -137,6 +144,9 @@ func TestServerAuthListsGrantedLibraryAndRejectsWrites(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "Film (2020)", "Film.mkv"), []byte("video bytes"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "Film (2020)", "Film.en.srt"), []byte("1\n00:00:01,000 --> 00:00:02,000\nHello\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	storage, err := rclonestore.New(ctx, root, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -153,6 +163,9 @@ func TestServerAuthListsGrantedLibraryAndRejectsWrites(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "DatabaseCurrent", "Film.mkv"), []byte("database bytes"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "DatabaseCurrent", "Film.en.srt"), []byte("1\n00:00:01,000 --> 00:00:02,000\nHello from current path\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	storage.FlushDirCache()
 	if data, err := storage.ReadFile("DatabaseCurrent/Film.mkv"); err != nil || string(data) != "database bytes" {
 		t.Fatalf("read inventory path: %q %v", data, err)
@@ -160,6 +173,7 @@ func TestServerAuthListsGrantedLibraryAndRejectsWrites(t *testing.T) {
 	if err := db.SaveLibraryInventory(ctx, &model.LibraryInventorySnapshot{CollectionID: "movies", CompletedAt: time.Now().UTC(), Entries: []model.LibraryInventoryEntry{
 		{Path: "DatabaseCurrent", Scope: "library", Role: "other", IsDir: true, JellyfinID: item.ID()},
 		{Path: path.Join("DatabaseCurrent", "Film.mkv"), Scope: "library", Role: "video", Size: int64(len("database bytes"))},
+		{Path: path.Join("DatabaseCurrent", "Film.en.srt"), Scope: "library", Role: "subtitle", Size: int64(len("1\n00:00:01,000 --> 00:00:02,000\nHello from current path\n"))},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -189,6 +203,13 @@ func TestServerAuthListsGrantedLibraryAndRejectsWrites(t *testing.T) {
 	serve.ServeHTTP(getResponse, get)
 	if getResponse.Code != http.StatusOK || getResponse.Body.String() != "database bytes" {
 		t.Fatalf("virtual video GET = %d %q", getResponse.Code, getResponse.Body.String())
+	}
+	subtitle := httptest.NewRequest(http.MethodGet, "/dav/Movies/All/Film%20(2020)/Film%20(2020).en.srt", nil)
+	subtitle.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("alice:secret")))
+	subtitleResponse := httptest.NewRecorder()
+	serve.ServeHTTP(subtitleResponse, subtitle)
+	if subtitleResponse.Code != http.StatusOK || !strings.Contains(subtitleResponse.Body.String(), "Hello from current path") {
+		t.Fatalf("virtual subtitle GET = %d %q", subtitleResponse.Code, subtitleResponse.Body.String())
 	}
 	ranged := httptest.NewRequest(http.MethodGet, "/dav/Movies/All/Film%20(2020)/Film%20(2020).mkv", nil)
 	ranged.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("alice:secret")))
