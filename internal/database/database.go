@@ -124,6 +124,7 @@ type MediaOperationRepo interface {
 type LibraryInventoryRepo interface {
 	GetLibraryInventory(context.Context, string) (*model.LibraryInventorySnapshot, error)
 	SaveLibraryInventory(context.Context, *model.LibraryInventorySnapshot) error
+	UpdateLibraryInventorySnapshot(context.Context, *model.LibraryInventorySnapshot) error
 	MarkLibraryInventoryMovesApplied(context.Context, string, []string) error
 }
 

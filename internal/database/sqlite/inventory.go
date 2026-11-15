@@ -78,7 +78,8 @@ func (s *SqliteRepo) MarkLibraryInventoryMovesApplied(ctx context.Context, colle
 	}
 	defer tx.Rollback()
 	var payload string
-	if err := tx.GetContext(ctx, &payload, `SELECT payload FROM library_inventory_snapshots WHERE collection_id=?`, collectionID); err != nil {
+	var generation int64
+	if err := tx.QueryRowxContext(ctx, `SELECT generation,payload FROM library_inventory_snapshots WHERE collection_id=?`, collectionID).Scan(&generation, &payload); err != nil {
 		return err
 	}
 	var snapshot model.LibraryInventorySnapshot
@@ -98,8 +99,38 @@ func (s *SqliteRepo) MarkLibraryInventoryMovesApplied(ctx context.Context, colle
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE library_inventory_snapshots SET payload=? WHERE collection_id=?`, string(updated), collectionID); err != nil {
+	result, err := tx.ExecContext(ctx, `UPDATE library_inventory_snapshots SET payload=? WHERE collection_id=? AND generation=?`, string(updated), collectionID, generation)
+	if err != nil {
 		return err
 	}
+	if rows, rowsErr := result.RowsAffected(); rowsErr != nil {
+		return rowsErr
+	} else if rows != 1 {
+		return fmt.Errorf("library inventory generation changed while completing move relinks")
+	}
 	return tx.Commit()
+}
+
+// UpdateLibraryInventorySnapshot persists an administrative catalog decision
+// without claiming that another remote scan generation completed.
+func (s *SqliteRepo) UpdateLibraryInventorySnapshot(ctx context.Context, snapshot *model.LibraryInventorySnapshot) error {
+	if snapshot == nil || snapshot.CollectionID == "" || snapshot.Generation <= 0 {
+		return fmt.Errorf("existing library inventory snapshot is required")
+	}
+	payload, err := json.Marshal(snapshot)
+	if err != nil {
+		return err
+	}
+	result, err := s.dbWriteHandle.ExecContext(ctx, `UPDATE library_inventory_snapshots SET payload=? WHERE collection_id=? AND generation=?`, string(payload), snapshot.CollectionID, snapshot.Generation)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return fmt.Errorf("library inventory generation changed during administrative update")
+	}
+	return nil
 }

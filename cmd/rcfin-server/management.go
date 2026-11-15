@@ -97,7 +97,10 @@ func runManagementCommand(configPath string, args []string) error {
 		if len(args) >= 2 && args[1] == "retry" {
 			return runMediaCommand(ctx, repo, config.Collections, append([]string{"retry"}, args[2:]...))
 		}
-		return errors.New("usage: rcfin library <list|scan LIBRARY_ID [--full]|status LIBRARY_ID|refresh metadata|subtitles LIBRARY_ID|retry LIBRARY_ID ITEM_KEY ACTION|inbox stage LIBRARY_ID ITEM_PATH|organize plan|apply LIBRARY_ID>")
+		if len(args) >= 2 && args[1] == "item" {
+			return runLibraryItemCommand(ctx, repo, config, args[2:])
+		}
+		return errors.New("usage: rcfin library <list|scan LIBRARY_ID [--full]|status LIBRARY_ID|refresh metadata|subtitles LIBRARY_ID|retry LIBRARY_ID ITEM_KEY ACTION|inbox stage LIBRARY_ID ITEM_PATH|organize plan|apply LIBRARY_ID|item adopt-move LIBRARY_ID --from PATH --to PATH>")
 	case "user":
 		return runUserCommand(ctx, repo, config.Collections, args[1:])
 	case "media":
@@ -105,6 +108,75 @@ func runManagementCommand(configPath string, args []string) error {
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func runLibraryItemCommand(ctx context.Context, repo database.Repository, config configFile, args []string) error {
+	if len(args) < 2 || args[0] != "adopt-move" {
+		return errors.New("usage: rcfin library item adopt-move LIBRARY_ID --from PATH --to PATH")
+	}
+	libraryID := args[1]
+	flags := pflag.NewFlagSet("library item adopt-move", pflag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	fromPath := flags.String("from", "", "Old catalog path")
+	toPath := flags.String("to", "", "Current catalog path")
+	if err := flags.Parse(args[2:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *fromPath == "" || *toPath == "" {
+		return errors.New("usage: rcfin library item adopt-move LIBRARY_ID --from PATH --to PATH")
+	}
+	var selected *collectionConfig
+	for i := range config.Collections {
+		if config.Collections[i].ID == libraryID {
+			selected = &config.Collections[i]
+			break
+		}
+	}
+	if selected == nil {
+		return fmt.Errorf("unknown library ID %q", libraryID)
+	}
+	if err := rclonestore.Configure(config.Rclone.Config, config.Rclone.CacheDir); err != nil {
+		return fmt.Errorf("configure Rclone: %w", err)
+	}
+	storage, err := rclonestore.New(ctx, selected.Remote, selected.VFS)
+	if err != nil {
+		return fmt.Errorf("open library %q: %w", libraryID, err)
+	}
+	defer storage.Close()
+	inbox := selected.Media.InboxPath
+	if inbox == "" {
+		inbox = ".Inbox"
+	}
+	coll := &collection.Collection{ID: libraryID, Type: collection.CollectionType(selected.Type), Storage: storage, InboxPath: inbox}
+	storage.FlushDirCache()
+	inventory, err := collection.InventoryLibrary(ctx, coll, inbox)
+	if err != nil {
+		return fmt.Errorf("inventory library: %w", err)
+	}
+	if _, err := collection.ReconcileLibraryInventory(ctx, repo, libraryID, inventory, time.Now().UTC(), inventoryVersionsForLibrary(*selected)); err != nil {
+		return fmt.Errorf("reconcile before move adoption: %w", err)
+	}
+	snapshot, err := repo.GetLibraryInventory(ctx, libraryID)
+	if err != nil {
+		return fmt.Errorf("load current library inventory: %w", err)
+	}
+	if err := collection.AdoptInventoryMove(snapshot, *fromPath, *toPath); err != nil {
+		return err
+	}
+	if err := repo.UpdateLibraryInventorySnapshot(ctx, snapshot); err != nil {
+		return fmt.Errorf("persist adopted move: %w", err)
+	}
+	change := collection.InventoryChange{Kind: collection.InventoryMoved, OldPath: *fromPath, Path: *toPath}
+	if err := relinkMovedMediaOperations(ctx, repo, libraryID, coll.Type, []collection.InventoryChange{change}, inventory); err != nil {
+		return fmt.Errorf("relink adopted move operations: %w", err)
+	}
+	return json.NewEncoder(os.Stdout).Encode(struct {
+		CollectionID string `json:"collection_id"`
+		Generation   int64  `json:"generation"`
+		From         string `json:"from"`
+		To           string `json:"to"`
+		State        string `json:"state"`
+	}{libraryID, snapshot.Generation, *fromPath, *toPath, "adopted"})
 }
 
 func runLibraryOrganizeCommand(ctx context.Context, repo database.Repository, config configFile, args []string) error {

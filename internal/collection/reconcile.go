@@ -195,12 +195,12 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 	oldByFingerprint := make(map[string][]model.LibraryInventoryEntry)
 	newByFingerprint := make(map[string][]model.LibraryInventoryEntry)
 	for _, entry := range oldMissing {
-		if !matchedOld[entry.Path] {
+		if !entry.IsDir && !matchedOld[entry.Path] {
 			oldByFingerprint[moveFingerprint(entry)] = append(oldByFingerprint[moveFingerprint(entry)], entry)
 		}
 	}
 	for _, entry := range newEntries {
-		if !matchedNew[entry.Path] {
+		if !entry.IsDir && !matchedNew[entry.Path] {
 			newByFingerprint[moveFingerprint(entry)] = append(newByFingerprint[moveFingerprint(entry)], entry)
 		}
 	}

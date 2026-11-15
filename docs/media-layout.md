@@ -264,7 +264,11 @@ apply requires the relevant organization feature enabled and its `dry_run`
 setting disabled. Existing-path normalization additionally requires
 `media.normalize_existing.enabled`. `rcfin library retry LIBRARY ITEM_KEY
 ACTION` retries a failed journal operation. The running server recovers queued
-operations during its next library cycle. `rcfin library scan LIBRARY --full`
+operations during its next library cycle. When a unique move cannot be inferred,
+review the source and destination with status, then explicitly accept one
+fingerprint-matching video file with `rcfin library item adopt-move LIBRARY
+--from OLD_PATH --to NEW_PATH`. This updates catalog identity and journal paths;
+it does not move remote files. `rcfin library scan LIBRARY --full`
 is an explicit full remote listing; ordinary scans already reconcile a full
 listing, and scans do not imply provider refresh.
 

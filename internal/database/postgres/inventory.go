@@ -109,3 +109,27 @@ func (p *PostgresRepo) MarkLibraryInventoryMovesApplied(ctx context.Context, col
 	}
 	return tx.Commit()
 }
+
+// UpdateLibraryInventorySnapshot persists an administrative catalog decision
+// without claiming that another remote scan generation completed.
+func (p *PostgresRepo) UpdateLibraryInventorySnapshot(ctx context.Context, snapshot *model.LibraryInventorySnapshot) error {
+	if snapshot == nil || snapshot.CollectionID == "" || snapshot.Generation <= 0 {
+		return fmt.Errorf("existing library inventory snapshot is required")
+	}
+	payload, err := json.Marshal(snapshot)
+	if err != nil {
+		return err
+	}
+	result, err := p.dbWriteHandle.ExecContext(ctx, `UPDATE library_inventory_snapshots SET payload=$1 WHERE collection_id=$2 AND generation=$3`, string(payload), snapshot.CollectionID, snapshot.Generation)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return fmt.Errorf("library inventory generation changed during administrative update")
+	}
+	return nil
+}

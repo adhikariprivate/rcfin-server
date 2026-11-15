@@ -48,6 +48,11 @@ func (r *memoryInventoryRepo) MarkLibraryInventoryMovesApplied(_ context.Context
 	return nil
 }
 
+func (r *memoryInventoryRepo) UpdateLibraryInventorySnapshot(_ context.Context, snapshot *model.LibraryInventorySnapshot) error {
+	r.snapshot = snapshot
+	return nil
+}
+
 func TestReconcileLibraryInventoryBootstrapsExistingLibraryWithoutEnrichment(t *testing.T) {
 	repo := &memoryInventoryRepo{}
 	result, err := ReconcileLibraryInventory(context.Background(), repo, "movies", []InventoryEntry{
@@ -162,6 +167,29 @@ func TestReconcileLibraryInventoryRecognizesFolderRenameWithoutNewWork(t *testin
 	}
 }
 
+func TestReconcileDoesNotInferFolderMoveFromMatchingDirectoryAttributesAlone(t *testing.T) {
+	repo := &memoryInventoryRepo{}
+	_, err := ReconcileLibraryInventory(context.Background(), repo, "movies", []InventoryEntry{
+		{Path: "Old", Scope: InventoryScopeLibrary, Role: InventoryOther, IsDir: true, ModTime: 20},
+		{Path: "Old/Old.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, Size: 10, ModTime: 20},
+	}, time.Unix(100, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := ReconcileLibraryInventory(context.Background(), repo, "movies", []InventoryEntry{
+		{Path: "New", Scope: InventoryScopeLibrary, Role: InventoryOther, IsDir: true, ModTime: 20},
+		{Path: "New/New.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, Size: 99, ModTime: 20},
+	}, time.Unix(200, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, change := range result.Changes {
+		if change.Kind == InventoryMoved && (change.OldPath == "Old" || change.Path == "New") {
+			t.Fatalf("directory move inferred without a matching subtree: %#v", result.Changes)
+		}
+	}
+}
+
 func TestReconcileLibraryInventoryDoesNotReplaceSnapshotWhenSaveFails(t *testing.T) {
 	previous := &model.LibraryInventorySnapshot{Generation: 4}
 	repo := &memoryInventoryRepo{snapshot: previous, err: errors.New("db unavailable")}
@@ -236,5 +264,23 @@ func TestReconcileLibraryInventoryUsesConfiguredMissingGrace(t *testing.T) {
 	}
 	if len(repo.snapshot.Entries) != 0 {
 		t.Fatalf("expired tombstone remains in inventory: %#v", repo.snapshot.Entries)
+	}
+}
+
+func TestAdoptInventoryMoveResolvesMissingCandidateToAmbiguousVideo(t *testing.T) {
+	missingAt := time.Unix(100, 0).UTC()
+	snapshot := &model.LibraryInventorySnapshot{Generation: 8, Entries: []model.LibraryInventoryEntry{
+		{Path: "Old/Movie.mkv", Scope: InventoryScopeLibrary, Role: string(InventoryVideo), Fingerprint: "same", Identity: "tmdb=42", FirstSeenGeneration: 2, MissingSince: &missingAt},
+		{Path: "New/Movie.mkv", Scope: InventoryScopeLibrary, Role: string(InventoryVideo), Fingerprint: "same", Classification: string(InventoryAmbiguous), FirstSeenGeneration: 8},
+	}}
+	if err := AdoptInventoryMove(snapshot, "Old/Movie.mkv", "New/Movie.mkv"); err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Entries) != 1 {
+		t.Fatalf("adoption retained old catalog path: %#v", snapshot.Entries)
+	}
+	entry := snapshot.Entries[0]
+	if entry.Path != "New/Movie.mkv" || entry.Identity != "tmdb=42" || entry.FirstSeenGeneration != 2 || entry.Classification != string(InventoryMoved) || entry.PreviousPath != "Old/Movie.mkv" || !entry.MoveRelinkPending {
+		t.Fatalf("adopted inventory entry lost old identity or pending relink: %#v", entry)
 	}
 }

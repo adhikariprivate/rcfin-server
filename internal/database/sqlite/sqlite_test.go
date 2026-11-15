@@ -78,6 +78,29 @@ func TestMarkInventoryMovesAppliedDoesNotCreateScanGeneration(t *testing.T) {
 	}
 }
 
+func TestAdministrativeInventoryUpdatePreservesGeneration(t *testing.T) {
+	repo, err := New(&ConfigFile{Filename: filepath.Join(t.TempDir(), "inventory-update.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	snapshot := &model.LibraryInventorySnapshot{CollectionID: "movies", CompletedAt: time.Now().UTC(), Entries: []model.LibraryInventoryEntry{{Path: "New/Movie.mkv", Classification: "ambiguous"}}}
+	if err := repo.SaveLibraryInventory(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	snapshot.Entries[0].Classification = "moved"
+	if err := repo.UpdateLibraryInventorySnapshot(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := repo.GetLibraryInventory(context.Background(), "movies")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Generation != 1 || loaded.Entries[0].Classification != "moved" {
+		t.Fatalf("administrative update changed scan generation or was not saved: %#v", loaded)
+	}
+}
+
 func TestRelinkMediaOperationPreservesCompletedDecisionAtNewPath(t *testing.T) {
 	repo, err := New(&ConfigFile{Filename: filepath.Join(t.TempDir(), "relink.db")})
 	if err != nil {
