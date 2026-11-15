@@ -369,7 +369,8 @@ func runLibraryRefreshCommand(ctx context.Context, repo database.Repository, con
 	}
 	flags := pflag.NewFlagSet("library refresh", pflag.ContinueOnError)
 	itemPath := flags.String("item", "", "Item path, file or containing folder")
-	replace := flags.Bool("replace", false, "Allow replacing this stage's existing outputs")
+	replace := flags.Bool("replace", false, "Allow replacing existing metadata NFOs or subtitles for this selected stage")
+	replaceArtwork := flags.Bool("replace-artwork", false, "Allow replacing existing posters and backdrops during metadata refresh")
 	language := flags.StringArray("language", nil, "Subtitle language (repeatable; subtitles stage only)")
 	if err := flags.Parse(args[2:]); err != nil {
 		return err
@@ -379,6 +380,9 @@ func runLibraryRefreshCommand(ctx context.Context, repo database.Repository, con
 	}
 	if stage == "metadata" && len(*language) > 0 {
 		return errors.New("--language is only valid for subtitle refresh")
+	}
+	if stage == "subtitles" && *replaceArtwork {
+		return errors.New("--replace-artwork is only valid for metadata refresh")
 	}
 	if err := rclonestore.Configure(config.Rclone.Config, config.Rclone.CacheDir); err != nil {
 		return fmt.Errorf("configure Rclone: %w", err)
@@ -446,6 +450,8 @@ func runLibraryRefreshCommand(ctx context.Context, repo database.Repository, con
 		}
 		if *replace {
 			policy.OverwriteExisting = true
+		}
+		if *replaceArtwork {
 			policy.OverwriteArtwork = true
 		}
 		var reports []metadatarefresh.Report

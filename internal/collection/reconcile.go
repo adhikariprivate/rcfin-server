@@ -226,6 +226,7 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 	for _, entry := range oldMissing {
 		if !matchedOld[entry.Path] {
 			changes = append(changes, InventoryChange{Kind: InventoryMissing, Path: entry.Path})
+			entry.Classification = string(InventoryMissing)
 			if entry.MissingSince == nil {
 				missingAt := completed.UTC()
 				entry.MissingSince = &missingAt
@@ -233,6 +234,23 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 			if completed.Sub(*entry.MissingSince) < missingGrace {
 				current = append(current, entry)
 			}
+		}
+	}
+	classificationByPath := make(map[string]InventoryChangeKind, len(changes))
+	for _, change := range changes {
+		if change.Kind != InventoryMissing {
+			classificationByPath[change.Path] = change.Kind
+		}
+	}
+	for i := range current {
+		if kind, ok := classificationByPath[current[i].Path]; ok {
+			if prior, existed := oldByPath[current[i].Path]; existed && prior.Classification == string(InventoryAmbiguous) && kind == InventoryUnchanged {
+				current[i].Classification = string(InventoryAmbiguous)
+			} else {
+				current[i].Classification = string(kind)
+			}
+		} else if current[i].Classification == "" {
+			current[i].Classification = string(InventoryBaseline)
 		}
 	}
 	for _, change := range changes {

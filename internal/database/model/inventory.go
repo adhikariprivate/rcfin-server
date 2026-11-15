@@ -10,6 +10,7 @@ type LibraryInventoryEntry struct {
 	LastSeenGeneration  int64      `json:"last_seen_generation,omitempty"`
 	Scope               string     `json:"scope"`
 	Role                string     `json:"role"`
+	Classification      string     `json:"classification,omitempty"`
 	Size                int64      `json:"size"`
 	ModTime             int64      `json:"mod_time"`
 	IsDir               bool       `json:"is_dir"`

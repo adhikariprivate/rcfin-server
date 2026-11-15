@@ -91,6 +91,15 @@ func TestReconcileLibraryInventoryRecognizesUniqueRenameAndDuplicateAmbiguity(t 
 	if ambiguous != 3 {
 		t.Fatalf("ambiguous duplicate changes = %#v", result.Changes)
 	}
+	var persistedAmbiguity string
+	for _, entry := range repo.snapshot.Entries {
+		if entry.Path == "c/movie.mkv" {
+			persistedAmbiguity = entry.Classification
+		}
+	}
+	if persistedAmbiguity != string(InventoryAmbiguous) {
+		t.Fatalf("ambiguous classification was not saved for status: %q", persistedAmbiguity)
+	}
 }
 
 func TestReconcileLibraryInventoryRecognizesFolderRenameWithoutNewWork(t *testing.T) {

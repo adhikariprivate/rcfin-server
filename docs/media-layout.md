@@ -252,8 +252,10 @@ LIBRARY` to inspect the last saved inventory. Use `rcfin library inbox status
 LIBRARY [--item PATH]` for Inbox paths, stable-transfer observations, and
 organization review operations. `rcfin library refresh metadata
 LIBRARY [--item PATH]` and `rcfin library refresh subtitles LIBRARY [--item
-PATH] [--language LANG]` explicitly request provider work; `--replace` is scoped
-to the selected stage. `rcfin library inbox stage LIBRARY ITEM_PATH` queues a
+PATH] [--language LANG]` explicitly request provider work. For metadata,
+`--replace` permits replacing NFO metadata and `--replace-artwork` separately
+permits replacing posters/backdrops. For subtitles, `--replace` permits
+replacing local subtitle files. `rcfin library inbox stage LIBRARY ITEM_PATH` queues a
 same-library move into Inbox, where ordinary transfer-readiness checks apply.
 Use `rcfin library organize plan LIBRARY [--item PATH] [--existing]` to review
 the proposed paths. After reviewing the report, `rcfin library organize apply
