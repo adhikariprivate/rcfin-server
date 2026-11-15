@@ -171,7 +171,7 @@ func runLibraryItemCommand(ctx context.Context, repo database.Repository, config
 		if !entry.MoveRelinkPending || entry.PreviousPath == "" || entry.Path != *toPath && !strings.HasPrefix(entry.Path, *toPath+"/") {
 			continue
 		}
-		moves = append(moves, collection.InventoryChange{Kind: collection.InventoryMoved, OldPath: entry.PreviousPath, Path: entry.Path})
+		moves = append(moves, collection.InventoryChange{Kind: collection.InventoryMoved, OldPath: entry.PreviousPath, Path: entry.Path, Entry: collection.InventoryEntry{Path: entry.Path, IsDir: entry.IsDir}})
 	}
 	if err := relinkMovedMediaOperations(ctx, repo, libraryID, coll.Type, moves, inventory); err != nil {
 		return fmt.Errorf("relink adopted move operations: %w", err)

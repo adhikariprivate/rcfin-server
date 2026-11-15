@@ -645,6 +645,43 @@ func relinkMovedMediaOperations(ctx context.Context, db database.Repository, lib
 	if err != nil {
 		return err
 	}
+	// Organization root operations carry the stable Jellyfin item ID in their
+	// evidence. Rebase only their completed destination path when a confirmed
+	// directory move is observed, so the stable ID remains attached to the item.
+	for _, operation := range operations {
+		if !isStableItemIDOperation(operation.Action) || operation.Status != "complete" && operation.Status != "completed" || operation.DestinationPath == "" {
+			continue
+		}
+		var selected *collection.InventoryChange
+		for i := range moves {
+			move := &moves[i]
+			if !move.Entry.IsDir || operation.DestinationPath != move.OldPath && !strings.HasPrefix(operation.DestinationPath, move.OldPath+"/") {
+				continue
+			}
+			if selected == nil || len(move.OldPath) > len(selected.OldPath) {
+				selected = move
+			}
+		}
+		if selected == nil {
+			continue
+		}
+		newDestination := rebaseOperationPath(operation.DestinationPath, selected.OldPath, selected.Path)
+		isDirectory := false
+		for _, entry := range inventory {
+			if entry.Path == newDestination && entry.IsDir {
+				isDirectory = true
+				break
+			}
+		}
+		if !isDirectory {
+			continue
+		}
+		operation.DestinationPath = newDestination
+		operation.UpdatedAt = time.Now().UTC()
+		if err := db.UpsertMediaOperation(ctx, &operation); err != nil {
+			return fmt.Errorf("relink stable item ID for %q: %w", operation.ItemKey, err)
+		}
+	}
 	for _, operation := range operations {
 		if operation.Action != "metadata_refresh" && !strings.HasPrefix(operation.Action, "subtitle_refresh:") {
 			continue
@@ -704,6 +741,10 @@ func relinkMovedMediaOperations(ctx context.Context, db database.Repository, lib
 		}
 	}
 	return db.MarkLibraryInventoryMovesApplied(ctx, libraryID, movedPaths)
+}
+
+func isStableItemIDOperation(action string) bool {
+	return action == "stage_existing" || action == "move_directory" || action == "move_directory:root"
 }
 
 func inventoryVideoAtPath(inventory []collection.InventoryEntry, target string) (collection.InventoryEntry, bool) {

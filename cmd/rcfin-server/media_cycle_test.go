@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,11 +25,15 @@ func TestConfirmedFolderMoveRelinksCompletedMetadataOperation(t *testing.T) {
 	if err := repo.UpsertMediaOperation(ctx, operation); err != nil {
 		t.Fatal(err)
 	}
+	stableIDOperation := &model.MediaOperation{ID: mediaOperationID("movies", "Inbox/Movie", "move_directory"), CollectionID: "movies", ItemKey: "Inbox/Movie", SourcePath: "Inbox/Movie", DestinationPath: "Old", Action: "move_directory", Status: "complete", Evidence: `{"stable_item_id":"jellyfin-stable-id"}`, CreatedAt: now, UpdatedAt: now, NextAttempt: now, LeaseUntil: now}
+	if err := repo.UpsertMediaOperation(ctx, stableIDOperation); err != nil {
+		t.Fatal(err)
+	}
 	if err := repo.SaveLibraryInventory(ctx, &model.LibraryInventorySnapshot{CollectionID: "movies", CompletedAt: now, Entries: []model.LibraryInventoryEntry{{Path: "Renamed", MoveRelinkPending: true}, {Path: newPath, MoveRelinkPending: true}}}); err != nil {
 		t.Fatal(err)
 	}
-	changes := []collection.InventoryChange{{Kind: collection.InventoryMoved, OldPath: "Old", Path: "Renamed"}, {Kind: collection.InventoryMoved, OldPath: oldPath, Path: newPath}}
-	inventory := []collection.InventoryEntry{{Path: newPath, Scope: collection.InventoryScopeLibrary, Role: collection.InventoryVideo, Size: 10, ModTime: 20}}
+	changes := []collection.InventoryChange{{Kind: collection.InventoryMoved, OldPath: "Old", Path: "Renamed", Entry: collection.InventoryEntry{Path: "Renamed", IsDir: true}}, {Kind: collection.InventoryMoved, OldPath: oldPath, Path: newPath, Entry: collection.InventoryEntry{Path: newPath, Role: collection.InventoryVideo, Size: 10, ModTime: 20}}}
+	inventory := []collection.InventoryEntry{{Path: "Renamed", Scope: collection.InventoryScopeLibrary, IsDir: true}, {Path: newPath, Scope: collection.InventoryScopeLibrary, Role: collection.InventoryVideo, Size: 10, ModTime: 20}}
 	if err := relinkMovedMediaOperations(ctx, repo, "movies", collection.CollectionTypeMovies, changes, inventory); err != nil {
 		t.Fatal(err)
 	}
@@ -41,6 +46,13 @@ func TestConfirmedFolderMoveRelinksCompletedMetadataOperation(t *testing.T) {
 	}
 	if relinked.ID != mediaOperationID("movies", newPath, "metadata_refresh") {
 		t.Fatalf("operation id did not follow the new idempotency key: %q", relinked.ID)
+	}
+	stableRelinked, err := repo.GetMediaOperation(ctx, "movies", "Inbox/Movie", "move_directory")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stableRelinked == nil || stableRelinked.DestinationPath != "Renamed" || !strings.Contains(stableRelinked.Evidence, "jellyfin-stable-id") {
+		t.Fatalf("stable Jellyfin item ID journal did not follow its confirmed folder rename: %#v", stableRelinked)
 	}
 	snapshot, err := repo.GetLibraryInventory(ctx, "movies")
 	if err != nil {
