@@ -434,11 +434,11 @@ func runLibraryInboxStatusCommand(ctx context.Context, repo database.Repository,
 
 func runLibraryRefreshCommand(ctx context.Context, repo database.Repository, config configFile, args []string) error {
 	if len(args) < 2 {
-		return errors.New("usage: rcfin library refresh <metadata|subtitles> LIBRARY_ID [--item PATH] [--language LANG] [--replace]")
+		return errors.New("usage: rcfin library refresh <metadata|subtitles|all> LIBRARY_ID [--item PATH] [--language LANG] [--replace|--replace-metadata] [--replace-artwork] [--replace-subtitles]")
 	}
 	stage, libraryID := args[0], args[1]
-	if stage != "metadata" && stage != "subtitles" {
-		return fmt.Errorf("unsupported refresh stage %q; expected metadata or subtitles", stage)
+	if stage != "metadata" && stage != "subtitles" && stage != "all" {
+		return fmt.Errorf("unsupported refresh stage %q; expected metadata, subtitles, or all", stage)
 	}
 	var selected *collectionConfig
 	for i := range config.Collections {
@@ -453,7 +453,9 @@ func runLibraryRefreshCommand(ctx context.Context, repo database.Repository, con
 	flags := pflag.NewFlagSet("library refresh", pflag.ContinueOnError)
 	itemPath := flags.String("item", "", "Item path, file or containing folder")
 	replace := flags.Bool("replace", false, "Allow replacing existing metadata NFOs or subtitles for this selected stage")
+	replaceMetadata := flags.Bool("replace-metadata", false, "Allow replacing existing NFO metadata during all-stage refresh")
 	replaceArtwork := flags.Bool("replace-artwork", false, "Allow replacing existing posters and backdrops during metadata refresh")
+	replaceSubtitles := flags.Bool("replace-subtitles", false, "Allow replacing local subtitle files during all-stage refresh")
 	language := flags.StringArray("language", nil, "Subtitle language (repeatable; subtitles stage only)")
 	if err := flags.Parse(args[2:]); err != nil {
 		return err
@@ -466,6 +468,12 @@ func runLibraryRefreshCommand(ctx context.Context, repo database.Repository, con
 	}
 	if stage == "subtitles" && *replaceArtwork {
 		return errors.New("--replace-artwork is only valid for metadata refresh")
+	}
+	if stage != "all" && (*replaceMetadata || *replaceSubtitles) {
+		return errors.New("--replace-metadata and --replace-subtitles are only valid for refresh all")
+	}
+	if stage == "all" && *replace {
+		return errors.New("refresh all requires stage-specific --replace-metadata, --replace-artwork, and --replace-subtitles flags")
 	}
 	if err := rclonestore.Configure(config.Rclone.Config, config.Rclone.CacheDir); err != nil {
 		return fmt.Errorf("configure Rclone: %w", err)
@@ -520,103 +528,131 @@ func runLibraryRefreshCommand(ctx context.Context, repo database.Repository, con
 
 	switch stage {
 	case "metadata":
-		policy := selected.Media.Metadata
-		if !policy.FetchNFO && !policy.FetchArtwork {
-			return errors.New("metadata refresh has no configured output; enable fetch_nfo or fetch_artwork")
-		}
-		keyEnv := strings.TrimSpace(policy.APIKeyEnv)
-		if keyEnv == "" {
-			keyEnv = "RCFIN_TMDB_API_KEY"
-		}
-		client, err := provider.NewTMDb(os.Getenv(keyEnv), mediaHTTPClient(policy.RequestTimeout))
+		reports, err := runMetadataRefreshStage(ctx, coll, repo, inventory, pathsByScope, selected.Media, *replace, *replaceArtwork)
 		if err != nil {
-			return fmt.Errorf("metadata provider credential environment variable %s is empty", keyEnv)
-		}
-		if policy.RetryLimit > 0 {
-			client.SetRetryLimit(policy.RetryLimit)
-		}
-		if *replace {
-			policy.OverwriteExisting = true
-		}
-		if *replaceArtwork {
-			policy.OverwriteArtwork = true
-		}
-		var reports []metadatarefresh.Report
-		for _, scope := range []string{collection.InventoryScopeLibrary, collection.InventoryScopeInbox} {
-			paths := pathsByScope[scope]
-			if len(paths) == 0 {
-				continue
-			}
-			report, err := metadatarefresh.Run(ctx, coll, client, metadatarefresh.Options{
-				Write: true, Force: true, AlgorithmVersion: metadatarefresh.AlgorithmVersion,
-				InboxOnly: scope == collection.InventoryScopeInbox, Inventory: inventory, ItemPaths: paths,
-				Journal: repo, FetchNFO: policy.FetchNFO, FetchArtwork: policy.FetchArtwork,
-				OverwriteExisting: policy.OverwriteExisting, OverwriteArtwork: policy.OverwriteArtwork,
-				Language: policy.Language, FallbackLanguages: policy.FallbackLanguages,
-				ArtworkMaxBytes: policy.ArtworkMaxBytes, ArtworkMaxWidth: policy.ArtworkMaxWidth,
-				ArtworkMaxHeight: policy.ArtworkMaxHeight, ArtworkFormats: policy.ArtworkFormats,
-				ArtworkPosterSize: policy.ArtworkPosterSize, ArtworkBackdropSize: policy.ArtworkBackdropSize,
-				MinimumConfidence: policy.MinimumConfidence,
-			})
-			if err != nil {
-				return fmt.Errorf("metadata refresh: %w", err)
-			}
-			reports = append(reports, report)
+			return fmt.Errorf("metadata refresh: %w", err)
 		}
 		return json.NewEncoder(os.Stdout).Encode(reports)
 	case "subtitles":
-		policy := selected.Media.Subtitles
-		keyEnv, usernameEnv, passwordEnv := strings.TrimSpace(policy.APIKeyEnv), strings.TrimSpace(policy.UsernameEnv), strings.TrimSpace(policy.PasswordEnv)
-		if keyEnv == "" {
-			keyEnv = "RCFIN_OPENSUBTITLES_API_KEY"
-		}
-		if usernameEnv == "" {
-			usernameEnv = "RCFIN_OPENSUBTITLES_USERNAME"
-		}
-		if passwordEnv == "" {
-			passwordEnv = "RCFIN_OPENSUBTITLES_PASSWORD"
-		}
-		client, err := subtitles.NewOpenSubtitles(os.Getenv(keyEnv), os.Getenv(usernameEnv), os.Getenv(passwordEnv), mediaHTTPClient(policy.RequestTimeout))
+		reports, err := runSubtitleRefreshStage(ctx, coll, repo, inventory, pathsByScope, selected.Media, *language, *replace)
 		if err != nil {
-			return fmt.Errorf("subtitle provider credential environment variable %s is empty", keyEnv)
-		}
-		if policy.RetryLimit > 0 {
-			client.SetRetryLimit(policy.RetryLimit)
-		}
-		if policy.MaxDownloadBytes > 0 {
-			client.SetMaxDownloadBytes(policy.MaxDownloadBytes)
-		}
-		if *replace {
-			policy.OverwriteExisting = true
-		}
-		languages := policy.Languages
-		if len(*language) > 0 {
-			languages = *language
-		}
-		if len(languages) == 0 {
-			return errors.New("subtitle refresh requires at least one configured language or --language")
-		}
-		var reports []subtitles.SubtitleReport
-		for _, scope := range []string{collection.InventoryScopeLibrary, collection.InventoryScopeInbox} {
-			paths := pathsByScope[scope]
-			if len(paths) == 0 {
-				continue
-			}
-			report, err := subtitles.Refresh(ctx, coll, client, subtitles.RefreshOptions{
-				Force: true, AlgorithmVersion: subtitles.AlgorithmVersion,
-				InboxOnly: scope == collection.InventoryScopeInbox, Inventory: inventory, ItemPaths: paths,
-				Journal: repo, Languages: languages, Formats: policy.Formats,
-				HearingImpaired: policy.HearingImpaired, Forced: policy.Forced,
-				OverwriteExisting: policy.OverwriteExisting, MinimumConfidence: policy.MinimumConfidence, Write: true,
-			})
-			if err != nil {
-				return fmt.Errorf("subtitle refresh: %w", err)
-			}
-			reports = append(reports, report)
+			return fmt.Errorf("subtitle refresh: %w", err)
 		}
 		return json.NewEncoder(os.Stdout).Encode(reports)
+	case "all":
+		metadataReports, err := runMetadataRefreshStage(ctx, coll, repo, inventory, pathsByScope, selected.Media, *replaceMetadata, *replaceArtwork)
+		if err != nil {
+			return fmt.Errorf("metadata stage: %w", err)
+		}
+		var merged metadatarefresh.Report
+		merged.CollectionID = libraryID
+		for _, report := range metadataReports {
+			merged.Items = append(merged.Items, report.Items...)
+		}
+		mergeMetadataIDs(inventory, merged, coll.Type)
+		subtitleReports, err := runSubtitleRefreshStage(ctx, coll, repo, inventory, pathsByScope, selected.Media, *language, *replaceSubtitles)
+		if err != nil {
+			return fmt.Errorf("subtitle stage: %w", err)
+		}
+		return json.NewEncoder(os.Stdout).Encode(struct {
+			Metadata  []metadatarefresh.Report   `json:"metadata"`
+			Subtitles []subtitles.SubtitleReport `json:"subtitles"`
+		}{metadataReports, subtitleReports})
 	}
 	return nil
+}
+
+func runMetadataRefreshStage(ctx context.Context, coll *collection.Collection, repo database.Repository, inventory []collection.InventoryEntry, pathsByScope map[string][]string, media mediaConfig, replaceMetadata, replaceArtwork bool) ([]metadatarefresh.Report, error) {
+	policy := media.Metadata
+	if !policy.FetchNFO && !policy.FetchArtwork {
+		return nil, errors.New("metadata refresh has no configured output; enable fetch_nfo or fetch_artwork")
+	}
+	keyEnv := strings.TrimSpace(policy.APIKeyEnv)
+	if keyEnv == "" {
+		keyEnv = "RCFIN_TMDB_API_KEY"
+	}
+	client, err := provider.NewTMDb(os.Getenv(keyEnv), mediaHTTPClient(policy.RequestTimeout))
+	if err != nil {
+		return nil, fmt.Errorf("metadata provider credential environment variable %s is empty", keyEnv)
+	}
+	if policy.RetryLimit > 0 {
+		client.SetRetryLimit(policy.RetryLimit)
+	}
+	overwriteNFO := policy.OverwriteExisting || replaceMetadata
+	overwriteImages := policy.OverwriteArtwork || replaceArtwork
+	var reports []metadatarefresh.Report
+	for _, scope := range []string{collection.InventoryScopeLibrary, collection.InventoryScopeInbox} {
+		paths := pathsByScope[scope]
+		if len(paths) == 0 {
+			continue
+		}
+		report, runErr := metadatarefresh.Run(ctx, coll, client, metadatarefresh.Options{
+			Write: true, Force: true, AlgorithmVersion: metadatarefresh.AlgorithmVersion,
+			InboxOnly: scope == collection.InventoryScopeInbox, Inventory: inventory, ItemPaths: paths,
+			Journal: repo, FetchNFO: policy.FetchNFO, FetchArtwork: policy.FetchArtwork,
+			OverwriteExisting: overwriteNFO, OverwriteArtwork: overwriteImages,
+			Language: policy.Language, FallbackLanguages: policy.FallbackLanguages,
+			ArtworkMaxBytes: policy.ArtworkMaxBytes, ArtworkMaxWidth: policy.ArtworkMaxWidth,
+			ArtworkMaxHeight: policy.ArtworkMaxHeight, ArtworkFormats: policy.ArtworkFormats,
+			ArtworkPosterSize: policy.ArtworkPosterSize, ArtworkBackdropSize: policy.ArtworkBackdropSize,
+			MinimumConfidence: policy.MinimumConfidence,
+		})
+		if runErr != nil {
+			return reports, runErr
+		}
+		reports = append(reports, report)
+	}
+	return reports, nil
+}
+
+func runSubtitleRefreshStage(ctx context.Context, coll *collection.Collection, repo database.Repository, inventory []collection.InventoryEntry, pathsByScope map[string][]string, media mediaConfig, requestedLanguages []string, replace bool) ([]subtitles.SubtitleReport, error) {
+	policy := media.Subtitles
+	keyEnv, usernameEnv, passwordEnv := strings.TrimSpace(policy.APIKeyEnv), strings.TrimSpace(policy.UsernameEnv), strings.TrimSpace(policy.PasswordEnv)
+	if keyEnv == "" {
+		keyEnv = "RCFIN_OPENSUBTITLES_API_KEY"
+	}
+	if usernameEnv == "" {
+		usernameEnv = "RCFIN_OPENSUBTITLES_USERNAME"
+	}
+	if passwordEnv == "" {
+		passwordEnv = "RCFIN_OPENSUBTITLES_PASSWORD"
+	}
+	client, err := subtitles.NewOpenSubtitles(os.Getenv(keyEnv), os.Getenv(usernameEnv), os.Getenv(passwordEnv), mediaHTTPClient(policy.RequestTimeout))
+	if err != nil {
+		return nil, fmt.Errorf("subtitle provider credential environment variable %s is empty", keyEnv)
+	}
+	if policy.RetryLimit > 0 {
+		client.SetRetryLimit(policy.RetryLimit)
+	}
+	if policy.MaxDownloadBytes > 0 {
+		client.SetMaxDownloadBytes(policy.MaxDownloadBytes)
+	}
+	languages := policy.Languages
+	if len(requestedLanguages) > 0 {
+		languages = requestedLanguages
+	}
+	if len(languages) == 0 {
+		return nil, errors.New("subtitle refresh requires at least one configured language or --language")
+	}
+	var reports []subtitles.SubtitleReport
+	for _, scope := range []string{collection.InventoryScopeLibrary, collection.InventoryScopeInbox} {
+		paths := pathsByScope[scope]
+		if len(paths) == 0 {
+			continue
+		}
+		report, runErr := subtitles.Refresh(ctx, coll, client, subtitles.RefreshOptions{
+			Force: true, AlgorithmVersion: subtitles.AlgorithmVersion,
+			InboxOnly: scope == collection.InventoryScopeInbox, Inventory: inventory, ItemPaths: paths,
+			Journal: repo, Languages: languages, Formats: policy.Formats,
+			HearingImpaired: policy.HearingImpaired, Forced: policy.Forced,
+			OverwriteExisting: policy.OverwriteExisting || replace, MinimumConfidence: policy.MinimumConfidence, Write: true,
+		})
+		if runErr != nil {
+			return reports, runErr
+		}
+		reports = append(reports, report)
+	}
+	return reports, nil
 }
 
 func selectRefreshPaths(inventory []collection.InventoryEntry, requested string) (map[string][]string, error) {
@@ -685,10 +721,19 @@ func runLibraryScanCommand(ctx context.Context, repo database.Repository, config
 }
 
 func runLibraryStatusCommand(ctx context.Context, repo database.Repository, libraries []collectionConfig, args []string) error {
-	if len(args) != 1 {
-		return errors.New("usage: rcfin library status LIBRARY_ID")
+	if len(args) < 1 {
+		return errors.New("usage: rcfin library status LIBRARY_ID [--item PATH]")
 	}
 	libraryID := args[0]
+	flags := pflag.NewFlagSet("library status", pflag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	itemPath := flags.String("item", "", "Filter inventory and operation state to one relative path")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("unexpected arguments after library status flags")
+	}
 	if !configuredLibrary(libraries, libraryID) {
 		return fmt.Errorf("unknown library ID %q", libraryID)
 	}
@@ -699,7 +744,36 @@ func runLibraryStatusCommand(ctx context.Context, repo database.Repository, libr
 	if snapshot == nil {
 		return fmt.Errorf("library %q has no completed inventory; run `rcfin library scan %s`", libraryID, libraryID)
 	}
-	return json.NewEncoder(os.Stdout).Encode(snapshot)
+	clean := strings.TrimSpace(*itemPath)
+	if clean != "" && (path.IsAbs(clean) || path.Clean(clean) != clean || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.Contains(clean, "\\")) {
+		return errors.New("item path must be a clean relative path within the library")
+	}
+	if clean != "" {
+		entries := make([]model.LibraryInventoryEntry, 0)
+		for _, entry := range snapshot.Entries {
+			if entry.Path == clean || strings.HasPrefix(entry.Path, clean+"/") || strings.HasPrefix(clean, entry.Path+"/") {
+				entries = append(entries, entry)
+			}
+		}
+		snapshot.Entries = entries
+	}
+	operations, err := database.ListAllMediaOperations(ctx, repo, libraryID)
+	if err != nil {
+		return fmt.Errorf("read library operation status: %w", err)
+	}
+	if clean != "" {
+		filtered := make([]model.MediaOperation, 0)
+		for _, operation := range operations {
+			if operation.ItemKey == clean || strings.HasPrefix(operation.ItemKey, clean+"/") || strings.HasPrefix(clean, operation.ItemKey+"/") {
+				filtered = append(filtered, operation)
+			}
+		}
+		operations = filtered
+	}
+	return json.NewEncoder(os.Stdout).Encode(struct {
+		Inventory  *model.LibraryInventorySnapshot `json:"inventory"`
+		Operations []model.MediaOperation          `json:"operations"`
+	}{snapshot, operations})
 }
 
 func runMediaCommand(ctx context.Context, repo database.Repository, libraries []collectionConfig, args []string) error {

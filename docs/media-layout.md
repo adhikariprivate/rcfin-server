@@ -257,6 +257,11 @@ PATH] [--language LANG]` explicitly request provider work. For metadata,
 permits replacing posters/backdrops. For subtitles, `--replace` permits
 replacing local subtitle files. `rcfin library inbox stage LIBRARY ITEM_PATH` queues a
 same-library move into Inbox, where ordinary transfer-readiness checks apply.
+`rcfin library refresh all LIBRARY [--item PATH]` runs metadata first and
+subtitles second from the same inventory. Its replacement flags are separate:
+`--replace-metadata`, `--replace-artwork`, and `--replace-subtitles`. `rcfin
+library status LIBRARY [--item PATH]` reports matching inventory classification
+and media-operation state.
 Use `rcfin library organize plan LIBRARY [--item PATH] [--existing]` to review
 the proposed paths. After reviewing the report, `rcfin library organize apply
 LIBRARY --yes [--item PATH] [--existing]` executes the configured operation;
