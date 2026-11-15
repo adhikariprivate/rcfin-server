@@ -3,6 +3,7 @@ package collection
 import (
 	"context"
 	"fmt"
+	"os"
 	"path"
 	"regexp"
 	"sort"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/adhikariprivate/rcfin-server/internal/collection/metadata"
+	"github.com/adhikariprivate/rcfin-server/internal/rclonestore"
 )
 
 // InventoryRole describes a file's role without assuming that it belongs to a
@@ -30,6 +32,7 @@ const (
 type InventoryEntry struct {
 	Path               string            `json:"path"`
 	Scope              string            `json:"scope,omitempty"`
+	BackendID          string            `json:"backend_id,omitempty"`
 	Size               int64             `json:"size"`
 	ModTime            int64             `json:"mod_time,omitempty"`
 	IsDir              bool              `json:"is_dir"`
@@ -188,13 +191,54 @@ func inventoryCollection(ctx context.Context, coll *Collection, inbox, scope str
 		return nil, fmt.Errorf("collection storage is required")
 	}
 	inbox = strings.Trim(strings.TrimSpace(inbox), "/")
+	readDir := coll.Storage.ReadDir
+	backendIDs := map[string]string{}
+	recursive, supported, listErr := coll.Storage.ListRecursive(ctx)
+	if listErr != nil {
+		return nil, fmt.Errorf("recursive inventory listing: %w", listErr)
+	}
+	if supported {
+		children := make(map[string][]os.FileInfo)
+		listed := make(map[string]rclonestore.RecursiveEntry, len(recursive))
+		for _, entry := range recursive {
+			if _, duplicate := listed[entry.Path]; duplicate {
+				return nil, fmt.Errorf("recursive inventory contains duplicate path %q", entry.Path)
+			}
+			listed[entry.Path] = entry
+			backendIDs[entry.Path] = entry.BackendID
+			parent := path.Dir(entry.Path)
+			if parent == "." {
+				parent = ""
+			}
+			children[parent] = append(children[parent], recursiveFileInfo{entry: entry})
+		}
+		for _, entry := range recursive {
+			for ancestor := path.Dir(entry.Path); ancestor != "" && ancestor != "."; ancestor = path.Dir(ancestor) {
+				if _, exists := listed[ancestor]; exists {
+					continue
+				}
+				listed[ancestor] = rclonestore.RecursiveEntry{Path: ancestor, IsDir: true}
+				grandparent := path.Dir(ancestor)
+				if grandparent == "." {
+					grandparent = ""
+				}
+				children[grandparent] = append(children[grandparent], recursiveFileInfo{entry: listed[ancestor]})
+			}
+		}
+		for dir := range children {
+			sort.Slice(children[dir], func(i, j int) bool { return children[dir][i].Name() < children[dir][j].Name() })
+		}
+		readDir = func(dir string) ([]os.FileInfo, error) {
+			return children[dir], nil
+		}
+	}
 	var result []InventoryEntry
 	var walk func(string) error
 	walk = func(dir string) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		entries, err := coll.Storage.ReadDir(dir)
+		entries, err := readDir(dir)
 		if err != nil {
 			return fmt.Errorf("list %q: %w", dir, err)
 		}
@@ -215,7 +259,7 @@ func inventoryCollection(ctx context.Context, coll *Collection, inbox, scope str
 					continue
 				}
 				if includeDirectories {
-					directory := InventoryEntry{Path: rel, IsDir: true, Size: fi.Size(), ModTime: fi.ModTime().UTC().UnixNano(), Role: InventoryOther, Scope: InventoryScopeLibrary}
+					directory := InventoryEntry{Path: rel, IsDir: true, Size: fi.Size(), ModTime: fi.ModTime().UTC().UnixNano(), BackendID: backendIDs[rel], Role: InventoryOther, Scope: InventoryScopeLibrary}
 					if insideInbox {
 						directory.Scope = InventoryScopeInbox
 					}
@@ -224,7 +268,7 @@ func inventoryCollection(ctx context.Context, coll *Collection, inbox, scope str
 				if insideInbox {
 					if format := discDirectoryFormat(name); format != "" && !inventoryExtraPath(rel) {
 						pathIDs, pathConflict := providerIDsInPathWithConflict(rel)
-						disc := InventoryEntry{Path: rel, Scope: InventoryScopeInbox, IsDir: true, Role: InventoryDisc, DiscFormat: format, DiscRoot: rel, ProviderIDs: pathIDs, IdentityConflict: pathConflict, Reason: "disc structure recognized and inventoried separately; playback is not enabled"}
+						disc := InventoryEntry{Path: rel, Scope: InventoryScopeInbox, BackendID: backendIDs[rel], IsDir: true, Role: InventoryDisc, DiscFormat: format, DiscRoot: rel, ProviderIDs: pathIDs, IdentityConflict: pathConflict, Reason: "disc structure recognized and inventoried separately; playback is not enabled"}
 						movieNFO := path.Join(path.Dir(rel), "movie.nfo")
 						if data, readErr := coll.Storage.ReadFile(movieNFO); readErr == nil {
 							var conflict bool
@@ -244,6 +288,7 @@ func inventoryCollection(ctx context.Context, coll *Collection, inbox, scope str
 			}
 			entry := classifyInventoryEntry(rel, fi.Size())
 			entry.ModTime = fi.ModTime().UTC().UnixNano()
+			entry.BackendID = backendIDs[rel]
 			entry.Scope = InventoryScopeLibrary
 			if insideInbox {
 				entry.Scope = InventoryScopeInbox
@@ -302,6 +347,22 @@ func inventoryCollection(ctx context.Context, coll *Collection, inbox, scope str
 	}
 	return result, nil
 }
+
+type recursiveFileInfo struct {
+	entry rclonestore.RecursiveEntry
+}
+
+func (f recursiveFileInfo) Name() string { return path.Base(f.entry.Path) }
+func (f recursiveFileInfo) Size() int64  { return f.entry.Size }
+func (f recursiveFileInfo) Mode() os.FileMode {
+	if f.entry.IsDir {
+		return os.ModeDir | 0o555
+	}
+	return 0o444
+}
+func (f recursiveFileInfo) ModTime() time.Time { return f.entry.ModTime }
+func (f recursiveFileInfo) IsDir() bool        { return f.entry.IsDir }
+func (f recursiveFileInfo) Sys() any           { return nil }
 
 func inventoryExtraPath(name string) bool {
 	for _, component := range strings.Split(name, "/") {

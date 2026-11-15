@@ -11,6 +11,7 @@ type LibraryInventoryEntry struct {
 	LastSeenGeneration  int64      `json:"last_seen_generation,omitempty"`
 	Scope               string     `json:"scope"`
 	Role                string     `json:"role"`
+	BackendID           string     `json:"backend_id,omitempty"`
 	Classification      string     `json:"classification,omitempty"`
 	MoveRelinkPending   bool       `json:"move_relink_pending,omitempty"`
 	Size                int64      `json:"size"`

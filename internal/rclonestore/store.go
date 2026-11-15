@@ -86,6 +86,16 @@ type Capabilities struct {
 	SameFilesystem bool `json:"same_filesystem"`
 }
 
+// RecursiveEntry is metadata returned by one Rclone recursive listing.
+// BackendID is informational because ID stability semantics vary by backend.
+type RecursiveEntry struct {
+	Path      string
+	Size      int64
+	ModTime   time.Time
+	IsDir     bool
+	BackendID string
+}
+
 const maxSidecarBytes = 32 << 20
 
 func (l *Library) Capabilities() Capabilities {
@@ -992,6 +1002,41 @@ func (l *Library) ReadDir(name string) ([]os.FileInfo, error) {
 		result = append(result, entry)
 	}
 	return result, nil
+}
+
+// ListRecursive uses the backend's optimized recursive-listing feature when
+// available. A false supported value asks callers to use directory traversal.
+func (l *Library) ListRecursive(ctx context.Context) ([]RecursiveEntry, bool, error) {
+	if l == nil || l.backend == nil {
+		return nil, false, fmt.Errorf("library storage is unavailable")
+	}
+	features := l.backend.Features()
+	if features == nil || features.ListR == nil {
+		return nil, false, nil
+	}
+	var entries []RecursiveEntry
+	err := features.ListR(ctx, "", func(batch fs.DirEntries) error {
+		for _, item := range batch {
+			remote := strings.Trim(strings.TrimSpace(item.Remote()), "/")
+			if remote == "" || path.Clean(remote) != remote || path.IsAbs(remote) || strings.HasPrefix(remote, "../") {
+				continue
+			}
+			entry := RecursiveEntry{Path: remote, Size: item.Size(), ModTime: item.ModTime(ctx)}
+			if directory, ok := item.(fs.Directory); ok {
+				entry.IsDir = true
+				entry.BackendID = directory.ID()
+			} else if id, ok := item.(fs.IDer); ok {
+				entry.BackendID = id.ID()
+			}
+			entries = append(entries, entry)
+		}
+		return ctx.Err()
+	})
+	if err != nil {
+		return nil, true, err
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
+	return entries, true, nil
 }
 
 // DirectorySize returns the byte total for files beneath a library-relative

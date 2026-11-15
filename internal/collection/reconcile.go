@@ -322,9 +322,9 @@ func persistedInventoryEntry(entry InventoryEntry) model.LibraryInventoryEntry {
 	}
 	// Provider IDs and title/year may change when RCFin writes an NFO. They are
 	// retained as rename evidence but excluded from the media fingerprint.
-	plain := fmt.Sprintf("%t\x00%s\x00%s\x00%d\x00%d", entry.IsDir, entry.Scope, entry.Role, entry.Size, entry.ModTime)
+	plain := fmt.Sprintf("%t\x00%s\x00%s\x00%s\x00%d\x00%d", entry.IsDir, entry.Scope, entry.Role, entry.BackendID, entry.Size, entry.ModTime)
 	hash := sha256.Sum256([]byte(plain))
-	return model.LibraryInventoryEntry{Path: entry.Path, Scope: entry.Scope, Role: string(entry.Role), Size: entry.Size, ModTime: entry.ModTime, IsDir: entry.IsDir, Fingerprint: hex.EncodeToString(hash[:]), Identity: identity}
+	return model.LibraryInventoryEntry{Path: entry.Path, Scope: entry.Scope, Role: string(entry.Role), BackendID: entry.BackendID, Size: entry.Size, ModTime: entry.ModTime, IsDir: entry.IsDir, Fingerprint: hex.EncodeToString(hash[:]), Identity: identity}
 }
 
 func populateTreeFingerprints(entries []model.LibraryInventoryEntry) {
