@@ -101,6 +101,24 @@ type Candidate struct {
 	DownloadCount   int64
 }
 
+// stringOrNumber handles OpenSubtitles IDs, which the API has returned as
+// either JSON strings or numbers across responses.
+type stringOrNumber string
+
+func (s *stringOrNumber) UnmarshalJSON(data []byte) error {
+	var value string
+	if err := json.Unmarshal(data, &value); err == nil {
+		*s = stringOrNumber(value)
+		return nil
+	}
+	var number json.Number
+	if err := json.Unmarshal(data, &number); err != nil {
+		return err
+	}
+	*s = stringOrNumber(number.String())
+	return nil
+}
+
 type searchResponse struct {
 	Data []struct {
 		ID         string `json:"id"`
@@ -116,12 +134,12 @@ type searchResponse struct {
 				FileName string `json:"file_name"`
 			} `json:"files"`
 			Feature struct {
-				Title   string `json:"title"`
-				Year    int    `json:"year"`
-				Season  int    `json:"season_number"`
-				Episode int    `json:"episode_number"`
-				TMDbID  string `json:"tmdb_id"`
-				IMDbID  string `json:"imdb_id"`
+				Title   string         `json:"title"`
+				Year    int            `json:"year"`
+				Season  int            `json:"season_number"`
+				Episode int            `json:"episode_number"`
+				TMDbID  stringOrNumber `json:"tmdb_id"`
+				IMDbID  stringOrNumber `json:"imdb_id"`
 			} `json:"feature_details"`
 		} `json:"attributes"`
 	} `json:"data"`
@@ -178,7 +196,7 @@ func (c *OpenSubtitles) Search(ctx context.Context, q SearchQuery) ([]Candidate,
 			continue
 		}
 		file := a.Files[0]
-		result = append(result, Candidate{ID: row.ID, FileID: file.FileID, FileName: file.FileName, Language: a.Language, HearingImpaired: a.HearingImpaired, Forced: a.ForeignPartsOnly, MovieHashMatch: a.MovieHashMatch, Title: a.Feature.Title, Year: a.Feature.Year, Season: a.Feature.Season, Episode: a.Feature.Episode, TMDbID: a.Feature.TMDbID, IMDbID: a.Feature.IMDbID, DownloadCount: a.DownloadCount, Format: strings.ToLower(a.Format)})
+		result = append(result, Candidate{ID: row.ID, FileID: file.FileID, FileName: file.FileName, Language: a.Language, HearingImpaired: a.HearingImpaired, Forced: a.ForeignPartsOnly, MovieHashMatch: a.MovieHashMatch, Title: a.Feature.Title, Year: a.Feature.Year, Season: a.Feature.Season, Episode: a.Feature.Episode, TMDbID: string(a.Feature.TMDbID), IMDbID: string(a.Feature.IMDbID), DownloadCount: a.DownloadCount, Format: strings.ToLower(a.Format)})
 	}
 	return result, nil
 }

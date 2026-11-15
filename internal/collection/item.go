@@ -464,6 +464,9 @@ func SidecarSubtitlesForVersion(item Item, mediaSourceID string) Subtitles {
 			}
 		}
 	}
+	// A single-source item may not need explicit MediaVersion entries.
+	// Preserve its ordinary sidecars when the caller requests the item's
+	// primary source ID.
 	if mediaSourceID == item.ID() {
 		return SidecarSubtitles(item)
 	}

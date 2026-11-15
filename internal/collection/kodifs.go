@@ -44,6 +44,11 @@ func (cr *CollectionRepo) buildMovies(ctx context.Context, coll *Collection, pac
 	videoByDirectory := map[string][]string{}
 	for _, entry := range inventory {
 		if entry.Role == InventoryVideo && !entry.IsDir {
+			// Nested grouping paths are supported for movies, but an episode
+			// recognized by its numbering must not become a movie in this scan.
+			if len(entry.Episodes) > 0 || entry.AirDate != "" {
+				continue
+			}
 			videoByDirectory[path.Dir(entry.Path)] = append(videoByDirectory[path.Dir(entry.Path)], entry.Path)
 		}
 	}
