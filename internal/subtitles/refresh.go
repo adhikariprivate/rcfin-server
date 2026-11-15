@@ -181,19 +181,25 @@ func Refresh(ctx context.Context, coll *collection.Collection, client *OpenSubti
 				continue
 			}
 			ext := candidateExtension(selected)
-			if !allowedFormat(ext, opts.Formats) {
+			if ext != "" && !allowedFormat(ext, opts.Formats) {
 				emit(SubtitleAction{Source: video.Path, Language: lang, State: "skipped", ProviderID: selected.ID, Confidence: confidence, Candidate: subtitleCandidateReport(selected), Reason: "best match has an unsupported subtitle format"}, video, opts, oldOperation)
 				continue
 			}
-			destination := subtitleDestination(video.Path, lang, opts.Forced, opts.HearingImpaired, ext)
-			action := SubtitleAction{Source: video.Path, Destination: destination, Language: lang, ProviderID: selected.ID, Confidence: confidence, Candidate: subtitleCandidateReport(selected)}
+			action := SubtitleAction{Source: video.Path, Language: lang, ProviderID: selected.ID, Confidence: confidence, Candidate: subtitleCandidateReport(selected)}
 			if !opts.Write {
+				if ext == "" {
+					action.State = "needs_review"
+					action.Reason = "provider did not report a subtitle format; a write-enabled run must confirm the downloaded file format"
+					emit(action, video, opts, oldOperation)
+					continue
+				}
+				action.Destination = subtitleDestination(video.Path, lang, opts.Forced, opts.HearingImpaired, ext)
 				action.State = "planned"
 				action.Reason = "would download and validate matching subtitle"
 				emit(action, video, opts, oldOperation)
 				continue
 			}
-			data, _, downloadErr := client.Download(ctx, selected.FileID)
+			data, downloadedName, downloadErr := client.Download(ctx, selected.FileID)
 			if downloadErr != nil {
 				action.State = "failed"
 				if errors.Is(downloadErr, ErrDownloadQuotaExceeded) {
@@ -205,6 +211,16 @@ func Refresh(ctx context.Context, coll *collection.Collection, client *OpenSubti
 				emit(action, video, opts, oldOperation)
 				continue
 			}
+			if ext == "" {
+				ext = candidateExtension(Candidate{FileName: downloadedName, Format: selected.Format})
+			}
+			if !allowedFormat(ext, opts.Formats) {
+				action.State = "needs_review"
+				action.Reason = "downloaded subtitle format is missing or unsupported"
+				emit(action, video, opts, oldOperation)
+				continue
+			}
+			action.Destination = subtitleDestination(video.Path, lang, opts.Forced, opts.HearingImpaired, ext)
 			validated, validateErr := validateSubtitle(data, ext)
 			if validateErr != nil {
 				action.State = "needs_review"
@@ -212,7 +228,7 @@ func Refresh(ctx context.Context, coll *collection.Collection, client *OpenSubti
 				emit(action, video, opts, oldOperation)
 				continue
 			}
-			if writeErr := coll.Storage.WriteSidecar(destination, validated, opts.OverwriteExisting); writeErr != nil {
+			if writeErr := coll.Storage.WriteSidecar(action.Destination, validated, opts.OverwriteExisting); writeErr != nil {
 				action.State = "failed"
 				action.Reason = writeErr.Error()
 			} else {
@@ -475,7 +491,7 @@ func rankSubtitle(q queryContext, candidates []Candidate, opts RefreshOptions) (
 		if !subtitleLanguageMatches(c.Language, q.Language) || c.HearingImpaired != opts.HearingImpaired || c.Forced != opts.Forced {
 			continue
 		}
-		if !allowedFormat(candidateExtension(c), opts.Formats) {
+		if ext := candidateExtension(c); ext != "" && !allowedFormat(ext, opts.Formats) {
 			continue
 		}
 		if q.MultiEpisode && !c.MovieHashMatch {
@@ -596,11 +612,18 @@ func subtitleLanguageMatches(candidate, requested string) bool {
 }
 
 func candidateExtension(c Candidate) string {
-	ext := strings.ToLower(strings.TrimPrefix(path.Ext(c.FileName), "."))
-	if ext == "" {
-		ext = strings.TrimPrefix(strings.ToLower(c.Format), ".")
+	for _, candidate := range []string{c.Format, path.Ext(c.FileName)} {
+		ext := strings.TrimPrefix(strings.ToLower(candidate), ".")
+		switch ext {
+		case "srt", "vtt", "ass", "ssa", "sub", "smi", "sami", "mpl", "tmp", "rt", "stl", "sbv", "ttml", "xml":
+			return ext
+		case "subrip":
+			return "srt"
+		case "webvtt":
+			return "vtt"
+		}
 	}
-	return ext
+	return ""
 }
 
 func subtitleCandidateReport(candidate Candidate) *SubtitleCandidateReport {
@@ -611,7 +634,7 @@ func subtitleCandidateReport(candidate Candidate) *SubtitleCandidateReport {
 		Title:           candidate.Title,
 		Year:            candidate.Year,
 		Language:        candidate.Language,
-		Format:          strings.ToLower(strings.TrimPrefix(candidate.Format, ".")),
+		Format:          candidateExtension(candidate),
 		HearingImpaired: candidate.HearingImpaired,
 		Forced:          candidate.Forced,
 		MovieHashMatch:  candidate.MovieHashMatch,

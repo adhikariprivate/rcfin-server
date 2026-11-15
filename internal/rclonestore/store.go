@@ -233,7 +233,7 @@ func (l *Library) WriteSidecar(name string, data []byte, overwrite bool) error {
 	defer l.openMu.Unlock()
 	_, statErr := l.vfs.Stat(clean)
 	exists := statErr == nil
-	if statErr != nil && !errors.Is(statErr, fs.ErrorObjectNotFound) && !errors.Is(statErr, fs.ErrorDirNotFound) {
+	if statErr != nil && !errors.Is(statErr, fs.ErrorObjectNotFound) && !errors.Is(statErr, fs.ErrorDirNotFound) && !errors.Is(statErr, os.ErrNotExist) {
 		return fmt.Errorf("check sidecar destination %q: %w", clean, statErr)
 	}
 	if exists && !overwrite {
@@ -271,7 +271,7 @@ func (l *Library) WriteSidecar(name string, data []byte, overwrite bool) error {
 		if _, err := l.vfs.Stat(clean); err == nil {
 			_ = l.vfs.Remove(temp)
 			return fmt.Errorf("sidecar destination %q appeared before promotion", clean)
-		} else if !errors.Is(err, fs.ErrorObjectNotFound) && !errors.Is(err, fs.ErrorDirNotFound) {
+		} else if !errors.Is(err, fs.ErrorObjectNotFound) && !errors.Is(err, fs.ErrorDirNotFound) && !errors.Is(err, os.ErrNotExist) {
 			_ = l.vfs.Remove(temp)
 			return fmt.Errorf("recheck sidecar destination: %w", err)
 		}

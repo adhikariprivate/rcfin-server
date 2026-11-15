@@ -398,6 +398,9 @@ func planShowScope(ctx context.Context, coll *collection.Collection, p provider.
 		}
 		sort.Strings(videoPaths)
 		for _, sidecar := range e {
+			if sidecar.IsDir || sidecar.Role != collection.InventorySubtitle && sidecar.Role != collection.InventoryNFO && sidecar.Role != collection.InventoryArtwork {
+				continue
+			}
 			if path.Dir(path.Dir(sidecar.Path)) != source {
 				continue
 			}

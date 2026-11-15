@@ -32,3 +32,4 @@ screenlog.*
 # Local Codex/agent state
 .pi/
 PLAN.md
+/.env
