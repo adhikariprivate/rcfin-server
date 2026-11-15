@@ -248,7 +248,9 @@ primary purpose must obtain the appropriate license directly from TMDb. See
 
 Administrative media operations are CLI-only. Use `rcfin library scan LIBRARY`
 to list and reconcile the library plus Inbox, then `rcfin library status
-LIBRARY` to inspect the last saved inventory. `rcfin library refresh metadata
+LIBRARY` to inspect the last saved inventory. Use `rcfin library inbox status
+LIBRARY [--item PATH]` for Inbox paths, stable-transfer observations, and
+organization review operations. `rcfin library refresh metadata
 LIBRARY [--item PATH]` and `rcfin library refresh subtitles LIBRARY [--item
 PATH] [--language LANG]` explicitly request provider work; `--replace` is scoped
 to the selected stage. `rcfin library inbox stage LIBRARY ITEM_PATH` queues a
@@ -269,12 +271,9 @@ work. If a repository reports that a worker no longer owns a lease, its
 operation context is canceled so it stops issuing further changes. Final
 journal writes carry the claimant's worker ID; SQLite and PostgreSQL reject a
 write from an older owner while a newer owner is running the operation.
-After a staging move or normalization attempt, RCFin rescans that collection
-and rebuilds the Jellyfin search index so clients see current paths without
-waiting for the periodic rescan. Failed or interrupted write-enabled attempts
-also trigger a rescan for source/destination reconciliation. Metadata and
-subtitle sidecar writes also trigger an immediate collection refresh, so the
-in-memory item metadata and media-stream list reflect the new files.
+The background library cycle reconciles the final paths after a completed move
+and rebuilds the Jellyfin search index. Metadata and subtitle sidecar writes
+also refresh the in-memory item metadata and media-stream list.
 Sidecar destinations must be strict relative paths beneath the configured
 library root. Writes verify temporary and promoted contents before reporting
 success. Explicit overwrites stage a verified backup; if a destination race

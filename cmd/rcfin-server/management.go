@@ -250,8 +250,11 @@ func runLibraryOrganizeCommand(ctx context.Context, repo database.Repository, co
 }
 
 func runLibraryInboxCommand(ctx context.Context, repo database.Repository, config configFile, args []string) error {
+	if len(args) > 0 && args[0] == "status" {
+		return runLibraryInboxStatusCommand(ctx, repo, config, args[1:])
+	}
 	if len(args) != 3 || args[0] != "stage" {
-		return errors.New("usage: rcfin library inbox stage LIBRARY_ID ITEM_PATH")
+		return errors.New("usage: rcfin library inbox <status LIBRARY_ID [--item PATH]|stage LIBRARY_ID ITEM_PATH>")
 	}
 	libraryID, source := args[1], args[2]
 	var selected *collectionConfig
@@ -282,6 +285,68 @@ func runLibraryInboxCommand(ctx context.Context, repo database.Repository, confi
 		return fmt.Errorf("stage existing item: %w", err)
 	}
 	return json.NewEncoder(os.Stdout).Encode(operation)
+}
+
+func runLibraryInboxStatusCommand(ctx context.Context, repo database.Repository, config configFile, args []string) error {
+	if len(args) < 1 {
+		return errors.New("usage: rcfin library inbox status LIBRARY_ID [--item PATH]")
+	}
+	libraryID := args[0]
+	flags := pflag.NewFlagSet("library inbox status", pflag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	itemPath := flags.String("item", "", "Filter to one relative Inbox item path")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("unexpected arguments after Inbox status flags")
+	}
+	if !configuredLibrary(config.Collections, libraryID) {
+		return fmt.Errorf("unknown library ID %q", libraryID)
+	}
+	snapshot, err := repo.GetLibraryInventory(ctx, libraryID)
+	if err != nil {
+		return fmt.Errorf("read library inventory: %w", err)
+	}
+	if snapshot == nil {
+		return fmt.Errorf("library %q has no completed inventory; run `rcfin library scan %s`", libraryID, libraryID)
+	}
+	clean := strings.TrimSpace(*itemPath)
+	if clean != "" && (path.IsAbs(clean) || path.Clean(clean) != clean || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.Contains(clean, "\\")) {
+		return errors.New("item path must be a clean relative path within the library")
+	}
+	var entries []model.LibraryInventoryEntry
+	for _, entry := range snapshot.Entries {
+		if entry.Scope != collection.InventoryScopeInbox {
+			continue
+		}
+		if clean != "" && entry.Path != clean && !strings.HasPrefix(entry.Path, clean+"/") && !strings.HasPrefix(clean, entry.Path+"/") {
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	operations, err := database.ListAllMediaOperations(ctx, repo, libraryID)
+	if err != nil {
+		return fmt.Errorf("read Inbox operation status: %w", err)
+	}
+	var relevant []model.MediaOperation
+	for _, operation := range operations {
+		isInboxWork := operation.Action == "inbox_stability" || operation.Action == "organization_review" || strings.HasPrefix(operation.ItemKey, ".Inbox/") || operation.ItemKey == ".Inbox"
+		if !isInboxWork {
+			continue
+		}
+		if clean != "" && operation.ItemKey != clean && !strings.HasPrefix(operation.ItemKey, clean+"/") && !strings.HasPrefix(clean, operation.ItemKey+"/") {
+			continue
+		}
+		relevant = append(relevant, operation)
+	}
+	return json.NewEncoder(os.Stdout).Encode(struct {
+		CollectionID string                        `json:"collection_id"`
+		Generation   int64                         `json:"generation"`
+		CompletedAt  time.Time                     `json:"completed_at"`
+		Entries      []model.LibraryInventoryEntry `json:"inbox_entries"`
+		Operations   []model.MediaOperation        `json:"operations"`
+	}{libraryID, snapshot.Generation, snapshot.CompletedAt, entries, relevant})
 }
 
 func runLibraryRefreshCommand(ctx context.Context, repo database.Repository, config configFile, args []string) error {
