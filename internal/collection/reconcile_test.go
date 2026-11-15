@@ -146,7 +146,7 @@ func TestReconcileLibraryInventoryRecognizesUniqueRenameAndDuplicateAmbiguity(t 
 		{Path: "old/movie.mkv", Scope: InventoryScopeLibrary, Role: string(InventoryVideo), Size: 100, ModTime: 20, Fingerprint: "fp", Identity: "tmdb=42"},
 	}}}
 	result, err := ReconcileLibraryInventory(context.Background(), repo, "movies", []InventoryEntry{
-		{Path: "new/movie.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, Size: 100, ModTime: 20},
+		{Path: "new/movie.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, Size: 100, ModTime: 20, ProviderIDs: map[string]string{"tmdb": "42"}},
 	}, time.Unix(200, 0))
 	if err != nil {
 		t.Fatal(err)
@@ -159,11 +159,11 @@ func TestReconcileLibraryInventoryRecognizesUniqueRenameAndDuplicateAmbiguity(t 
 	}
 
 	repo.snapshot = &model.LibraryInventorySnapshot{Generation: 2, Entries: []model.LibraryInventoryEntry{
-		{Path: "a/movie.mkv", Scope: InventoryScopeLibrary, Role: string(InventoryVideo), Size: 100, ModTime: 20, Fingerprint: "one"},
-		{Path: "b/movie.mkv", Scope: InventoryScopeLibrary, Role: string(InventoryVideo), Size: 100, ModTime: 20, Fingerprint: "two"},
+		{Path: "a/movie.mkv", Scope: InventoryScopeLibrary, Role: string(InventoryVideo), Size: 100, ModTime: 20, Fingerprint: "one", Identity: "tmdb=42"},
+		{Path: "b/movie.mkv", Scope: InventoryScopeLibrary, Role: string(InventoryVideo), Size: 100, ModTime: 20, Fingerprint: "two", Identity: "tmdb=42"},
 	}}
 	result, err = ReconcileLibraryInventory(context.Background(), repo, "movies", []InventoryEntry{
-		{Path: "c/movie.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, Size: 100, ModTime: 20},
+		{Path: "c/movie.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, Size: 100, ModTime: 20, ProviderIDs: map[string]string{"tmdb": "42"}},
 	}, time.Unix(300, 0))
 	if err != nil {
 		t.Fatal(err)
@@ -193,6 +193,35 @@ func TestReconcileLibraryInventoryRecognizesUniqueRenameAndDuplicateAmbiguity(t 
 	}
 	if persistedAmbiguity != string(InventoryAmbiguous) {
 		t.Fatalf("ambiguous classification was not saved for status: %q", persistedAmbiguity)
+	}
+}
+
+func TestReconcileDoesNotInferFileMoveFromSizeAndModTimeAlone(t *testing.T) {
+	repo := &memoryInventoryRepo{}
+	if _, err := ReconcileLibraryInventory(context.Background(), repo, "movies", []InventoryEntry{{
+		Path: "Old/Unknown.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, Size: 100, ModTime: 20,
+	}}, time.Unix(100, 0)); err != nil {
+		t.Fatal(err)
+	}
+	result, err := ReconcileLibraryInventory(context.Background(), repo, "movies", []InventoryEntry{{
+		Path: "New/Unknown.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, Size: 100, ModTime: 20,
+	}}, time.Unix(200, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	newCount, missingCount, movedCount := 0, 0, 0
+	for _, change := range result.Changes {
+		switch change.Kind {
+		case InventoryNew:
+			newCount++
+		case InventoryMissing:
+			missingCount++
+		case InventoryMoved:
+			movedCount++
+		}
+	}
+	if newCount != 1 || missingCount != 1 || movedCount != 0 {
+		t.Fatalf("same attributes without identity were treated as a move: %#v", result.Changes)
 	}
 }
 

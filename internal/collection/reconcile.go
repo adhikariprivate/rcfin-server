@@ -203,10 +203,25 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 				ambiguousOldPaths[oldDir.Path] = true
 				previous := oldDir
 				changes = append(changes, InventoryChange{Kind: InventoryAmbiguous, Path: oldDir.Path, OldPath: oldDir.Path, PreviousEntry: &previous})
+				for _, child := range oldMissing {
+					if child.Path == oldDir.Path || !strings.HasPrefix(child.Path, oldDir.Path+"/") {
+						continue
+					}
+					ambiguousOldPaths[child.Path] = true
+					previous := child
+					changes = append(changes, InventoryChange{Kind: InventoryAmbiguous, Path: child.Path, OldPath: child.Path, PreviousEntry: &previous})
+				}
 			}
 			for _, newDir := range newMatches {
 				matchedNew[newDir.Path] = true
 				changes = append(changes, InventoryChange{Kind: InventoryAmbiguous, Path: newDir.Path, Entry: entriesByPath[newDir.Path]})
+				for _, child := range newEntries {
+					if child.Path == newDir.Path || !strings.HasPrefix(child.Path, newDir.Path+"/") {
+						continue
+					}
+					matchedNew[child.Path] = true
+					changes = append(changes, InventoryChange{Kind: InventoryAmbiguous, Path: child.Path, Entry: entriesByPath[child.Path]})
+				}
 			}
 			continue
 		}
@@ -229,7 +244,7 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 		}
 		for relative, oldChild := range oldChildren {
 			newChild, ok := newChildren[relative]
-			if !ok || moveSubtreeEntryFingerprint(oldChild) != moveSubtreeEntryFingerprint(newChild) {
+			if !ok || moveSubtreeEntryFingerprint(oldChild) == "" || moveSubtreeEntryFingerprint(oldChild) != moveSubtreeEntryFingerprint(newChild) {
 				continue
 			}
 			matchedOld[oldChild.Path], matchedNew[newChild.Path] = true, true
@@ -240,12 +255,16 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 	newByFingerprint := make(map[string][]model.LibraryInventoryEntry)
 	for _, entry := range oldMissing {
 		if !entry.IsDir && !matchedOld[entry.Path] {
-			oldByFingerprint[moveFingerprint(entry)] = append(oldByFingerprint[moveFingerprint(entry)], entry)
+			if fingerprint := moveFingerprint(entry); fingerprint != "" {
+				oldByFingerprint[fingerprint] = append(oldByFingerprint[fingerprint], entry)
+			}
 		}
 	}
 	for _, entry := range newEntries {
 		if !entry.IsDir && !matchedNew[entry.Path] {
-			newByFingerprint[moveFingerprint(entry)] = append(newByFingerprint[moveFingerprint(entry)], entry)
+			if fingerprint := moveFingerprint(entry); fingerprint != "" {
+				newByFingerprint[fingerprint] = append(newByFingerprint[fingerprint], entry)
+			}
 		}
 	}
 	for fingerprint, oldMatches := range oldByFingerprint {
@@ -490,7 +509,7 @@ func populateTreeFingerprints(entries []model.LibraryInventoryEntry) {
 				descendants = append(descendants, fmt.Sprintf("D\x00%s\x00%s", relative, child.Scope))
 				continue
 			}
-			descendants = append(descendants, fmt.Sprintf("F\x00%s\x00%s\x00%s\x00%d\x00%d", relative, child.Scope, child.Role, child.Size, child.ModTime))
+			descendants = append(descendants, fmt.Sprintf("F\x00%s\x00%s\x00%s\x00%s\x00%d\x00%d", relative, child.Scope, child.Role, child.Identity, child.Size, child.ModTime))
 		}
 		if len(descendants) == 0 {
 			continue
@@ -502,12 +521,16 @@ func populateTreeFingerprints(entries []model.LibraryInventoryEntry) {
 }
 
 func moveFingerprint(entry model.LibraryInventoryEntry) string {
-	return fmt.Sprintf("%t\x00%s\x00%s\x00%d\x00%d", entry.IsDir, entry.Scope, entry.Role, entry.Size, entry.ModTime)
+	identity := strings.TrimSpace(entry.Identity)
+	if identity == "" {
+		return ""
+	}
+	return fmt.Sprintf("%t\x00%s\x00%s\x00%s\x00%d\x00%d", entry.IsDir, entry.Scope, entry.Role, identity, entry.Size, entry.ModTime)
 }
 
 func moveSubtreeEntryFingerprint(entry model.LibraryInventoryEntry) string {
 	if entry.IsDir {
 		return fmt.Sprintf("dir\x00%s\x00%s", entry.Scope, entry.Role)
 	}
-	return moveFingerprint(entry)
+	return fmt.Sprintf("file\x00%s\x00%s\x00%s\x00%d\x00%d", entry.Scope, entry.Role, entry.Identity, entry.Size, entry.ModTime)
 }
