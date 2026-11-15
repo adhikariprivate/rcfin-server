@@ -132,6 +132,11 @@ func TestReconcileLibraryInventoryRecognizesUniqueRenameAndDuplicateAmbiguity(t 
 	if ambiguous != 3 {
 		t.Fatalf("ambiguous duplicate changes = %#v", result.Changes)
 	}
+	for _, change := range result.Changes {
+		if change.Kind == InventoryMissing {
+			t.Fatalf("ambiguous source was also reported missing: %#v", result.Changes)
+		}
+	}
 	var persistedAmbiguity string
 	for _, entry := range repo.snapshot.Entries {
 		if entry.Path == "c/movie.mkv" {
@@ -140,6 +145,46 @@ func TestReconcileLibraryInventoryRecognizesUniqueRenameAndDuplicateAmbiguity(t 
 	}
 	if persistedAmbiguity != string(InventoryAmbiguous) {
 		t.Fatalf("ambiguous classification was not saved for status: %q", persistedAmbiguity)
+	}
+}
+
+func TestReconcileReportsDuplicateFolderMovesAsAmbiguous(t *testing.T) {
+	repo := &memoryInventoryRepo{}
+	_, err := ReconcileLibraryInventory(context.Background(), repo, "movies", []InventoryEntry{
+		{Path: "Old A", Scope: InventoryScopeLibrary, Role: InventoryOther, IsDir: true, ModTime: 20},
+		{Path: "Old A/Movie.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, Size: 100, ModTime: 20},
+		{Path: "Old B", Scope: InventoryScopeLibrary, Role: InventoryOther, IsDir: true, ModTime: 20},
+		{Path: "Old B/Movie.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, Size: 100, ModTime: 20},
+	}, time.Unix(100, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := ReconcileLibraryInventory(context.Background(), repo, "movies", []InventoryEntry{
+		{Path: "New A", Scope: InventoryScopeLibrary, Role: InventoryOther, IsDir: true, ModTime: 20},
+		{Path: "New A/Movie.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, Size: 100, ModTime: 20},
+		{Path: "New B", Scope: InventoryScopeLibrary, Role: InventoryOther, IsDir: true, ModTime: 20},
+		{Path: "New B/Movie.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, Size: 100, ModTime: 20},
+	}, time.Unix(200, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	directories, ambiguous, added, missing := 0, 0, 0, 0
+	for _, change := range result.Changes {
+		if change.Kind == InventoryAmbiguous {
+			ambiguous++
+			if !strings.Contains(change.Path, "/") {
+				directories++
+			}
+		}
+		if change.Kind == InventoryNew {
+			added++
+		}
+		if change.Kind == InventoryMissing {
+			missing++
+		}
+	}
+	if ambiguous != 8 || directories != 4 || added != 0 || missing != 0 {
+		t.Fatalf("duplicate folder move changes: ambiguous=%d directories=%d new=%d missing=%d (%#v)", ambiguous, directories, added, missing, result.Changes)
 	}
 }
 

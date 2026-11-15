@@ -154,6 +154,7 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 	}
 
 	matchedOld, matchedNew := map[string]bool{}, map[string]bool{}
+	ambiguousOldPaths := map[string]bool{}
 	// Directory moves are matched from a path-independent manifest of their
 	// descendants. Mark equivalent descendants as moves too, so a folder rename
 	// does not look like dozens of unrelated additions and removals.
@@ -170,7 +171,18 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 	}
 	for fingerprint, oldMatches := range oldDirs {
 		newMatches := newDirs[fingerprint]
+		if len(oldMatches) == 0 || len(newMatches) == 0 {
+			continue
+		}
 		if len(oldMatches) != 1 || len(newMatches) != 1 {
+			for _, oldDir := range oldMatches {
+				ambiguousOldPaths[oldDir.Path] = true
+				changes = append(changes, InventoryChange{Kind: InventoryAmbiguous, Path: oldDir.Path, OldPath: oldDir.Path})
+			}
+			for _, newDir := range newMatches {
+				matchedNew[newDir.Path] = true
+				changes = append(changes, InventoryChange{Kind: InventoryAmbiguous, Path: newDir.Path, Entry: entriesByPath[newDir.Path]})
+			}
 			continue
 		}
 		oldDir, newDir := oldMatches[0], newMatches[0]
@@ -221,6 +233,7 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 			}
 		} else if len(oldMatches) > 0 && len(newMatches) > 0 {
 			for _, oldEntry := range oldMatches {
+				ambiguousOldPaths[oldEntry.Path] = true
 				changes = append(changes, InventoryChange{Kind: InventoryAmbiguous, Path: oldEntry.Path, OldPath: oldEntry.Path})
 			}
 			for _, newEntry := range newMatches {
@@ -236,6 +249,17 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 	}
 	for _, entry := range oldMissing {
 		if !matchedOld[entry.Path] {
+			if ambiguousOldPaths[entry.Path] {
+				entry.Classification = string(InventoryAmbiguous)
+				if entry.MissingSince == nil {
+					missingAt := completed.UTC()
+					entry.MissingSince = &missingAt
+				}
+				if completed.Sub(*entry.MissingSince) < missingGrace {
+					current = append(current, entry)
+				}
+				continue
+			}
 			changes = append(changes, InventoryChange{Kind: InventoryMissing, Path: entry.Path})
 			entry.Classification = string(InventoryMissing)
 			if entry.MissingSince == nil {
