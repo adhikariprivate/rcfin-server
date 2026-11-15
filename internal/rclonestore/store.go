@@ -340,9 +340,9 @@ func (l *Library) WriteSidecar(name string, data []byte, overwrite bool) error {
 			if _, err := l.vfs.Stat(clean); err == nil {
 				_ = l.vfs.Remove(temp)
 				return fmt.Errorf("sidecar destination raced with overwrite; verified old sidecar retained at %q", backupPath)
-			} else if !errors.Is(err, fs.ErrorObjectNotFound) && !errors.Is(err, fs.ErrorDirNotFound) {
+			} else if !IsNotFound(err) {
 				_ = l.vfs.Remove(temp)
-				return fmt.Errorf("recheck sidecar destination before overwrite; verified backup retained at %q: %w", backupPath, err)
+				return l.restoreSidecarBackup(clean, backupPath, backupObject, fmt.Errorf("recheck sidecar destination before overwrite; verified backup retained at %q: %w", backupPath, err))
 			}
 		}
 	}

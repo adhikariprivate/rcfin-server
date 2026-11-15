@@ -61,3 +61,10 @@ func TestWriteSidecarCreatesAndReplacesLocalFile(t *testing.T) {
 		t.Fatalf("sidecar contents = %q, want replacement", got)
 	}
 }
+
+func TestIsNotFoundRecognizesOSNotExistFromVFS(t *testing.T) {
+	_, err := os.Stat(filepath.Join(t.TempDir(), "missing.nfo"))
+	if !IsNotFound(err) {
+		t.Fatalf("IsNotFound(%v) = false, want true", err)
+	}
+}
