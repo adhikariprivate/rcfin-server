@@ -212,6 +212,15 @@ func InventoryCollection(ctx context.Context, coll *Collection, inbox string, in
 					var pathConflict bool
 					entry.ProviderIDs, pathConflict = mergeProviderIDsWithConflict(entry.ProviderIDs, providerIDsInPath(rel))
 					entry.IdentityConflict = entry.IdentityConflict || pathConflict
+					// Jellyfin movie folders commonly use movie.nfo for item-level
+					// metadata. Include its provider IDs in inventory so subtitle
+					// matching sees the same identity as the movie scanner.
+					movieNFO := path.Join(path.Dir(rel), "movie.nfo")
+					if data, readErr := coll.Storage.ReadFile(movieNFO); readErr == nil {
+						var conflict bool
+						entry.ProviderIDs, conflict = mergeProviderIDsWithConflict(entry.ProviderIDs, metadata.NewNfoFromData(movieNFO, data).ProviderIDs())
+						entry.IdentityConflict = entry.IdentityConflict || conflict
+					}
 				}
 				nfoPath := path.Join(path.Dir(rel), strings.TrimSuffix(path.Base(rel), path.Ext(rel))+".nfo")
 				if data, readErr := coll.Storage.ReadFile(nfoPath); readErr == nil {
