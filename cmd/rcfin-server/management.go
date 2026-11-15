@@ -301,8 +301,19 @@ func runLibraryInboxStatusCommand(ctx context.Context, repo database.Repository,
 	if flags.NArg() != 0 {
 		return errors.New("unexpected arguments after Inbox status flags")
 	}
-	if !configuredLibrary(config.Collections, libraryID) {
+	var selected *collectionConfig
+	for i := range config.Collections {
+		if config.Collections[i].ID == libraryID {
+			selected = &config.Collections[i]
+			break
+		}
+	}
+	if selected == nil {
 		return fmt.Errorf("unknown library ID %q", libraryID)
+	}
+	inboxPath := strings.TrimSpace(selected.Media.InboxPath)
+	if inboxPath == "" {
+		inboxPath = ".Inbox"
 	}
 	snapshot, err := repo.GetLibraryInventory(ctx, libraryID)
 	if err != nil {
@@ -315,7 +326,7 @@ func runLibraryInboxStatusCommand(ctx context.Context, repo database.Repository,
 	if clean != "" && (path.IsAbs(clean) || path.Clean(clean) != clean || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.Contains(clean, "\\")) {
 		return errors.New("item path must be a clean relative path within the library")
 	}
-	var entries []model.LibraryInventoryEntry
+	entries := make([]model.LibraryInventoryEntry, 0)
 	for _, entry := range snapshot.Entries {
 		if entry.Scope != collection.InventoryScopeInbox {
 			continue
@@ -329,9 +340,9 @@ func runLibraryInboxStatusCommand(ctx context.Context, repo database.Repository,
 	if err != nil {
 		return fmt.Errorf("read Inbox operation status: %w", err)
 	}
-	var relevant []model.MediaOperation
+	relevant := make([]model.MediaOperation, 0)
 	for _, operation := range operations {
-		isInboxWork := operation.Action == "inbox_stability" || operation.Action == "organization_review" || strings.HasPrefix(operation.ItemKey, ".Inbox/") || operation.ItemKey == ".Inbox"
+		isInboxWork := operation.Action == "inbox_stability" || operation.Action == "organization_review" || strings.HasPrefix(operation.ItemKey, inboxPath+"/") || operation.ItemKey == inboxPath
 		if !isInboxWork {
 			continue
 		}
