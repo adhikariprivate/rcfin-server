@@ -53,6 +53,7 @@ collections:
     remote: files:HTPC/Movies
     media:
       scan_interval: 30m # One inventory cadence for Inbox, metadata, and subtitles.
+      missing_grace: 7d # Ignore a disappeared path until it stays absent this long.
       # Explicit relative intake path. It is excluded from the playable scan.
       inbox_path: .Inbox
       inbox:

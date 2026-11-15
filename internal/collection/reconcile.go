@@ -44,6 +44,7 @@ type InventoryReconciliation struct {
 type InventoryProcessingVersions struct {
 	ServerVersion     string
 	AlgorithmVersions map[string]int
+	MissingGrace      time.Duration
 }
 
 // ReconcileLibraryInventory persists a complete inventory only after the
@@ -84,6 +85,10 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 	processingVersions := InventoryProcessingVersions{}
 	if len(versions) > 0 {
 		processingVersions = versions[0]
+	}
+	missingGrace := processingVersions.MissingGrace
+	if missingGrace <= 0 {
+		missingGrace = defaultInventoryMissingGrace
 	}
 	var algorithmChanges []string
 	if previous != nil && previous.ServerVersion != "" && previous.ServerVersion != processingVersions.ServerVersion {
@@ -211,7 +216,7 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 				missingAt := completed.UTC()
 				entry.MissingSince = &missingAt
 			}
-			if completed.Sub(*entry.MissingSince) < defaultInventoryMissingGrace {
+			if completed.Sub(*entry.MissingSince) < missingGrace {
 				current = append(current, entry)
 			}
 		}

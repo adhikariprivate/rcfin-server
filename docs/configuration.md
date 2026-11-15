@@ -73,6 +73,7 @@ Use the normal Rclone tooling to create and verify remote sections. RCFin embeds
 | `collections[].remote` | Rclone remote path, e.g. `files:HTPC/Movies`. This key is named `remote`, not `directory`. |
 | `collections[].vfs` | Per-collection Rclone VFS options. See the [VFS reference](vfs-options.md). |
 | `collections[].media.scan_interval` | Optional per-library override for the single inventory cycle. Metadata, subtitles, and Inbox do not have independent poll intervals. |
+| `collections[].media.missing_grace` | Time an object must remain absent from successful inventories before its tombstone expires; default `7d`. |
 | `collections[].media.inbox.stable_for` | Quiet period for Inbox transfers when no reliable completion marker is configured; default `10m`. |
 | `collections[].media.inbox.completion_marker` | Optional marker the uploader creates only after the complete item has finished uploading. |
 

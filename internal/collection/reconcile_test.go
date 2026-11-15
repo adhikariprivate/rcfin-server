@@ -178,3 +178,20 @@ func TestReconcileLibraryInventoryRetainsMissingTombstoneAndClearsOnReappearance
 		t.Fatalf("reappeared object was not revived cleanly: %#v %#v", result.Changes, repo.snapshot.Entries)
 	}
 }
+
+func TestReconcileLibraryInventoryUsesConfiguredMissingGrace(t *testing.T) {
+	repo := &memoryInventoryRepo{snapshot: &model.LibraryInventorySnapshot{Generation: 1, Entries: []model.LibraryInventoryEntry{{
+		Path: "gone.mkv", Scope: InventoryScopeLibrary, Role: string(InventoryVideo), Fingerprint: "fp",
+	}}}}
+	missingAt := time.Unix(1000, 0).UTC()
+	versions := InventoryProcessingVersions{MissingGrace: time.Hour}
+	if _, err := ReconcileLibraryInventory(context.Background(), repo, "movies", nil, missingAt, versions); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReconcileLibraryInventory(context.Background(), repo, "movies", nil, missingAt.Add(2*time.Hour), versions); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.snapshot.Entries) != 0 {
+		t.Fatalf("expired tombstone remains in inventory: %#v", repo.snapshot.Entries)
+	}
+}

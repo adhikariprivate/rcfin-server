@@ -50,6 +50,16 @@ func currentInventoryProcessingVersions() collection.InventoryProcessingVersions
 	}
 }
 
+func inventoryVersionsForLibrary(library collectionConfig) collection.InventoryProcessingVersions {
+	versions := currentInventoryProcessingVersions()
+	if value := strings.TrimSpace(library.Media.MissingGrace); value != "" {
+		if parsed, err := time.ParseDuration(value); err == nil && parsed > 0 {
+			versions.MissingGrace = parsed
+		}
+	}
+	return versions
+}
+
 // libraryAutomationLoop owns the recurring inventory cadence. Each cycle
 // lists a library and Inbox once, then runs Inbox provisioning, metadata, and
 // subtitles in that order from the same snapshot.
@@ -126,7 +136,7 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 	if err != nil {
 		return fmt.Errorf("inventory: %w", err)
 	}
-	reconciliation, err := collection.ReconcileLibraryInventory(ctx, db, library.ID, inventory, time.Now().UTC(), currentInventoryProcessingVersions())
+	reconciliation, err := collection.ReconcileLibraryInventory(ctx, db, library.ID, inventory, time.Now().UTC(), inventoryVersionsForLibrary(library))
 	if err != nil {
 		return fmt.Errorf("reconcile inventory: %w", err)
 	}
@@ -231,7 +241,7 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 			log.Printf("Inbox organization report: %s", encoded)
 		}
 		if organizationReportSubmitted(orgReport) {
-			inventory, reconciliation, err = rescanAfterMediaMutation(ctx, collections, db, library.ID, coll)
+			inventory, reconciliation, err = rescanAfterMediaMutation(ctx, collections, db, library, coll)
 			if err != nil {
 				return fmt.Errorf("refresh inventory after Inbox organization: %w", err)
 			}
@@ -589,17 +599,17 @@ func mergeMetadataIDs(inventory []collection.InventoryEntry, report metadatarefr
 	}
 }
 
-func rescanAfterMediaMutation(ctx context.Context, collections *collection.CollectionRepo, db database.Repository, libraryID string, coll *collection.Collection) ([]collection.InventoryEntry, collection.InventoryReconciliation, error) {
+func rescanAfterMediaMutation(ctx context.Context, collections *collection.CollectionRepo, db database.Repository, library collectionConfig, coll *collection.Collection) ([]collection.InventoryEntry, collection.InventoryReconciliation, error) {
 	coll.Storage.FlushDirCache()
 	inventory, err := collection.InventoryLibrary(ctx, coll, coll.InboxPath)
 	if err != nil {
 		return nil, collection.InventoryReconciliation{}, err
 	}
-	reconciliation, err := collection.ReconcileLibraryInventory(ctx, db, libraryID, inventory, time.Now().UTC(), currentInventoryProcessingVersions())
+	reconciliation, err := collection.ReconcileLibraryInventory(ctx, db, library.ID, inventory, time.Now().UTC(), inventoryVersionsForLibrary(library))
 	if err != nil {
 		return nil, collection.InventoryReconciliation{}, err
 	}
-	if err := collections.RefreshCollectionWithInventory(ctx, libraryID, inventory); err != nil {
+	if err := collections.RefreshCollectionWithInventory(ctx, library.ID, inventory); err != nil {
 		return nil, collection.InventoryReconciliation{}, err
 	}
 	return inventory, reconciliation, nil

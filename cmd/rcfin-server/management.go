@@ -185,7 +185,7 @@ func runLibraryRefreshCommand(ctx context.Context, repo database.Repository, con
 	if err != nil {
 		return fmt.Errorf("inventory library: %w", err)
 	}
-	if _, err := collection.ReconcileLibraryInventory(ctx, repo, libraryID, inventory, time.Now().UTC(), currentInventoryProcessingVersions()); err != nil {
+	if _, err := collection.ReconcileLibraryInventory(ctx, repo, libraryID, inventory, time.Now().UTC(), inventoryVersionsForLibrary(*selected)); err != nil {
 		return fmt.Errorf("save inventory snapshot: %w", err)
 	}
 	pathsByScope, err := selectRefreshPaths(inventory, *itemPath)
@@ -368,7 +368,7 @@ func runLibraryScanCommand(ctx context.Context, repo database.Repository, config
 	if err != nil {
 		return fmt.Errorf("inventory library: %w", err)
 	}
-	reconciliation, err := collection.ReconcileLibraryInventory(ctx, repo, selected.ID, entries, time.Now().UTC(), currentInventoryProcessingVersions())
+	reconciliation, err := collection.ReconcileLibraryInventory(ctx, repo, selected.ID, entries, time.Now().UTC(), inventoryVersionsForLibrary(*selected))
 	if err != nil {
 		return fmt.Errorf("reconcile library inventory: %w", err)
 	}

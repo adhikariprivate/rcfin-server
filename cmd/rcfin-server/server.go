@@ -86,6 +86,7 @@ type collectionConfig struct {
 // dry-run stays enabled unless the operator explicitly changes both settings.
 type mediaConfig struct {
 	ScanInterval string `mapstructure:"scan_interval"`
+	MissingGrace string `mapstructure:"missing_grace"`
 	InboxPath    string `mapstructure:"inbox_path"`
 	Inbox        struct {
 		StableFor        string `mapstructure:"stable_for"`
@@ -246,6 +247,12 @@ func validateCollections(collections []collectionConfig) error {
 			parsed, err := time.ParseDuration(scanInterval)
 			if err != nil || parsed <= 0 {
 				return fmt.Errorf("collection %q has invalid media.scan_interval %q", c.ID, scanInterval)
+			}
+		}
+		if missingGrace := strings.TrimSpace(c.Media.MissingGrace); missingGrace != "" {
+			parsed, err := time.ParseDuration(missingGrace)
+			if err != nil || parsed <= 0 {
+				return fmt.Errorf("collection %q has invalid media.missing_grace %q", c.ID, missingGrace)
 			}
 		}
 		if stableFor := strings.TrimSpace(c.Media.Inbox.StableFor); stableFor != "" {
