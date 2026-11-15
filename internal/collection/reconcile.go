@@ -71,15 +71,29 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 			return InventoryReconciliation{}, fmt.Errorf("inventory contains duplicate path %q", entry.Path)
 		}
 		entriesByPath[entry.Path] = entry
-		current = append(current, persistedInventoryEntry(entry))
+		persisted := persistedInventoryEntry(entry)
+		current = append(current, persisted)
 	}
 	populateTreeFingerprints(current)
 	sort.Slice(current, func(i, j int) bool { return current[i].Path < current[j].Path })
 
 	oldByPath := map[string]model.LibraryInventoryEntry{}
+	nextGeneration := int64(1)
 	if previous != nil {
+		nextGeneration = previous.Generation + 1
 		for _, entry := range previous.Entries {
 			oldByPath[entry.Path] = entry
+		}
+	}
+	for i := range current {
+		current[i].LastSeenGeneration = nextGeneration
+		if prior, ok := oldByPath[current[i].Path]; ok {
+			current[i].FirstSeenGeneration = prior.FirstSeenGeneration
+			if current[i].FirstSeenGeneration == 0 {
+				current[i].FirstSeenGeneration = previous.Generation
+			}
+		} else {
+			current[i].FirstSeenGeneration = nextGeneration
 		}
 	}
 	processingVersions := InventoryProcessingVersions{}
@@ -219,6 +233,28 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 			if completed.Sub(*entry.MissingSince) < missingGrace {
 				current = append(current, entry)
 			}
+		}
+	}
+	for _, change := range changes {
+		if change.Kind != InventoryMoved {
+			continue
+		}
+		prior, exists := oldByPath[change.OldPath]
+		if !exists {
+			continue
+		}
+		for i := range current {
+			if current[i].Path != change.Path {
+				continue
+			}
+			current[i].FirstSeenGeneration = prior.FirstSeenGeneration
+			if current[i].FirstSeenGeneration == 0 {
+				current[i].FirstSeenGeneration = previous.Generation
+			}
+			if current[i].Identity == "" {
+				current[i].Identity = prior.Identity
+			}
+			break
 		}
 	}
 	sort.Slice(current, func(i, j int) bool { return current[i].Path < current[j].Path })

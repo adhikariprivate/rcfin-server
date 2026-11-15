@@ -117,6 +117,11 @@ func TestReconcileLibraryInventoryRecognizesFolderRenameWithoutNewWork(t *testin
 			t.Fatalf("folder move produced a false add/remove: %#v", result.Changes)
 		}
 	}
+	for _, entry := range repo.snapshot.Entries {
+		if entry.Path == "Renamed/Movie.mkv" && (entry.FirstSeenGeneration != 1 || entry.LastSeenGeneration != 2) {
+			t.Fatalf("folder move did not preserve inventory age: %#v", entry)
+		}
+	}
 }
 
 func TestReconcileLibraryInventoryDoesNotReplaceSnapshotWhenSaveFails(t *testing.T) {
