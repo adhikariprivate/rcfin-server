@@ -324,7 +324,7 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 		}
 		if len(inboxPaths) > 0 {
 			var stageReport metadatarefresh.Report
-			stageReport, err = runMetadataForPaths(ctx, db, coll, library, inventory, inboxPaths, true, tmdb, false)
+			stageReport, err = runMetadataForPaths(ctx, db, coll, library, inventory, inboxPaths, true, tmdb, metadataForced)
 			metadataReport.Items = append(metadataReport.Items, stageReport.Items...)
 			if err != nil {
 				log.Printf("Inbox metadata refresh for collection %q failed: %v", library.ID, err)
