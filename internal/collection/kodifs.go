@@ -24,7 +24,7 @@ var isSeasonImg = regexp.MustCompile(`^season([0-9]+)-?([a-z]+|)\.(jpg|jpeg|png|
 var isShowSubdir = regexp.MustCompile(`(?i)^(?:S([0-9]+)|Season[ ._-]*([0-9]+)|Specials([0-9]*))$`)
 var isExt1 = regexp.MustCompile(`^(.*)()\.(png|jpg|jpeg|tbn|nfo|srt|vtt)$`)
 var isExt2 = regexp.MustCompile(`^(.*)[.-]([a-z]+)\.(png|jpg|jpeg|tbn|nfo|srt|vtt)$`)
-var isYear = regexp.MustCompile(` \(([0-9]+)\)$`)
+var isYear = regexp.MustCompile(` \(([0-9]{4})\)(?: \[[^\]]+\])*$`)
 var subtitleLanguageSuffix = regexp.MustCompile(`(?i)^[a-z]{2,3}(?:-[a-z]{2,4})?$`)
 
 type epMapType struct {
@@ -146,11 +146,8 @@ func (cr *CollectionRepo) buildMovie(ctx context.Context, coll *Collection, dir 
 		return
 	}
 
-	s := isYear.FindStringSubmatch(dir)
-	year := 0
-	if len(s) > 0 {
-		year = parseInt(s[1])
-	}
+	folderYear := yearFromName(dir)
+	year := folderYear
 	if year == 0 && !created.IsZero() {
 		year = created.Year()
 	}
@@ -225,7 +222,6 @@ func (cr *CollectionRepo) buildMovie(ctx context.Context, coll *Collection, dir 
 		if ext == "nfo" {
 			if data, err := coll.Storage.ReadFile(path.Join(dir, name)); err == nil {
 				movie.Metadata = metadata.NewNfoFromData(path.Join(dir, name), data)
-				movie.Metadata.SetYear(year)
 			}
 			continue
 		}
@@ -234,6 +230,8 @@ func (cr *CollectionRepo) buildMovie(ctx context.Context, coll *Collection, dir 
 	// Setup a filename-based metadata handler in case of no metadata yet.
 	if movie.Metadata == nil {
 		movie.Metadata = metadata.NewFilename(movie.name, year)
+	} else if folderYear > 0 || movie.Metadata.Year() == 0 {
+		movie.Metadata.SetYear(year)
 	}
 	if stableID := coll.StableItemID(dir, movie.Metadata.ProviderIDs()); stableID != "" {
 		movie.id = stableID
@@ -657,9 +655,14 @@ func (cr *CollectionRepo) buildShow(ctx context.Context, coll *Collection, dir s
 		return
 	}
 
-	// guess the year in case it's not in the NFO file.
-	year := 0
-	if !item.firstVideo.IsZero() {
+	// Prefer the year in a tagged show folder or its NFO. Timestamps and the
+	// current year are only fallbacks when catalog metadata has no year.
+	folderYear := yearFromName(dir)
+	year := folderYear
+	if year == 0 && item.Metadata != nil {
+		year = item.Metadata.Year()
+	}
+	if year == 0 && !item.firstVideo.IsZero() {
 		year = item.firstVideo.Year()
 	}
 	if year == 0 {
@@ -669,8 +672,9 @@ func (cr *CollectionRepo) buildShow(ctx context.Context, coll *Collection, dir s
 	// Setup a filename-based metadata handler in case of no metadata yet.
 	if item.Metadata == nil {
 		item.Metadata = metadata.NewFilename(item.name, year)
+	} else if folderYear > 0 || item.Metadata.Year() == 0 {
+		item.Metadata.SetYear(year)
 	}
-	item.Metadata.SetYear(year)
 	stableShowID := false
 	if stableID := coll.StableItemID(dir, item.Metadata.ProviderIDs()); stableID != "" {
 		item.id = stableID
@@ -725,6 +729,13 @@ func stableProviderID(kind string, providerIDs map[string]string) (string, bool)
 		}
 	}
 	return "", false
+}
+
+func yearFromName(name string) int {
+	if match := isYear.FindStringSubmatch(name); len(match) > 0 {
+		return parseInt(match[1])
+	}
+	return 0
 }
 
 // InventoryShowRoot returns the collection-relative show directory for an

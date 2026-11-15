@@ -22,6 +22,7 @@ import (
 	"github.com/adhikariprivate/rcfin-server/internal/collection"
 	"github.com/adhikariprivate/rcfin-server/internal/database"
 	"github.com/adhikariprivate/rcfin-server/internal/database/model"
+	"github.com/adhikariprivate/rcfin-server/internal/rclonestore"
 )
 
 type LibraryConfig struct {
@@ -376,21 +377,32 @@ func (s *Server) addShowSidecars(t *requestTree, c collection.Collection, cfg Li
 
 func (s *Server) addSeasonSidecars(t *requestTree, c collection.Collection, cfg LibraryConfig, dir *node, season *collection.Season) {
 	if cfg.ShowNFO {
-		nfoPath := path.Join(season.Path(), season.Name(), "season.nfo")
+		nfoPath := seasonSourceDir(season)
+		if nfoPath != "" {
+			nfoPath = path.Join(nfoPath, "season.nfo")
+		}
 		t.add(dir, &node{name: "season.nfo", modTime: time.Now().UTC(), open: func() (http.File, error) {
-			if f, err := c.Storage.OpenFile(nfoPath); err == nil {
-				return f, nil
+			if nfoPath != "" {
+				if f, err := c.Storage.OpenFile(nfoPath); err == nil {
+					return f, nil
+				}
 			}
 			return memoryFile("season.nfo", marshalNFO(season)), nil
 		}})
 	}
 	if cfg.ShowArtwork && season.Poster() != "" {
-		p := season.Poster()
-		if !strings.Contains(p, "/") {
-			p = path.Join(season.Path(), season.Name(), p)
-		}
+		p := path.Join(season.Path(), season.Poster())
 		t.add(dir, &node{name: "poster" + safeExt(p, ".jpg"), modTime: time.Now().UTC(), open: func() (http.File, error) { return c.Storage.OpenFile(p) }})
 	}
+}
+
+func seasonSourceDir(season *collection.Season) string {
+	for _, episode := range season.Episodes {
+		if episode.Path() != "" && episode.FileName() != "" {
+			return path.Join(episode.Path(), path.Dir(episode.FileName()))
+		}
+	}
+	return ""
 }
 
 func viewValues(view string, item collection.Item) []string {
@@ -568,6 +580,9 @@ func (readOnlyFS) Stat(ctx context.Context, name string) (os.FileInfo, error) {
 	if !n.dir && n.size == 0 && n.open != nil {
 		f, err := n.open()
 		if err != nil {
+			if rclonestore.IsNotFound(err) {
+				return nil, &os.PathError{Op: "stat", Path: name, Err: os.ErrNotExist}
+			}
 			return nil, err
 		}
 		defer f.Close()

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -30,6 +31,88 @@ func TestSeasonDisplayName(t *testing.T) {
 	}
 	if got := seasonDisplayName(0); got != "Specials" {
 		t.Fatalf("season 0 display name = %q", got)
+	}
+}
+
+func TestShowUsesReadableSeasonFolderAndEpisodeSidecars(t *testing.T) {
+	ctx := context.Background()
+	db, err := sqlite.New(&sqlite.ConfigFile{Filename: filepath.Join(t.TempDir(), "dav-shows.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	password, err := bcrypt.GenerateFromPassword([]byte("secret"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertUser(ctx, &model.User{ID: "user-1", Username: "alice", Password: string(password), Properties: model.UserProperties{Admin: true}}); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	showPath := filepath.Join(root, "Example Show")
+	seasonPath := filepath.Join(showPath, "Season 01")
+	if err := os.MkdirAll(seasonPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(showPath, "tvshow.nfo"), []byte(`<tvshow><title>Example Show</title><year>2024</year></tvshow>`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seasonPath, "Example Show S01E01 Pilot.mkv"), []byte("episode bytes"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seasonPath, "Example Show S01E01 Pilot.nfo"), []byte(`<episodedetails><title>Pilot</title><season>1</season><episode>1</episode></episodedetails>`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seasonPath, "poster.jpg"), []byte("poster bytes"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	storage, err := rclonestore.New(ctx, root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	collections := collection.New(&collection.Options{Repo: db})
+	collections.AddCollection("TV Shows", "shows", string(collection.CollectionTypeShows), root, storage)
+	if err := collections.InitContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer collections.Close()
+	handler := New(Options{Path: "/dav", Collections: collections, Repo: db, Libraries: map[string]LibraryConfig{"shows": {Enabled: true, Views: []string{"all"}, TitleFolder: "{title}", ShowNFO: true, ShowArtwork: true}}})
+	router := mux.NewRouter()
+	router.PathPrefix("/dav").Handler(handler)
+	normalizer, err := muxnormalizer.New(router)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serve := normalizer.Middleware(router)
+	request := func(method, target string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, target, nil)
+		req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("alice:secret")))
+		response := httptest.NewRecorder()
+		serve.ServeHTTP(response, req)
+		return response
+	}
+	season := "/dav/TV%20Shows/All/Example%20Show/Season%2001"
+	listingReq := httptest.NewRequest("PROPFIND", season, strings.NewReader(`<d:propfind xmlns:d="DAV:"><d:allprop/></d:propfind>`))
+	listingReq.Header.Set("Depth", "1")
+	listingReq.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("alice:secret")))
+	listingResponse := httptest.NewRecorder()
+	serve.ServeHTTP(listingResponse, listingReq)
+	listingBody, err := url.PathUnescape(listingResponse.Body.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"Season 01", "Example Show - S01E01 - Pilot.mkv", "Example Show - S01E01 - Pilot.nfo", "season.nfo", "poster.jpg"} {
+		if listingResponse.Code != 207 || !strings.Contains(listingBody, expected) {
+			t.Fatalf("season listing missing %q (status %d): %s", expected, listingResponse.Code, listingResponse.Body.String())
+		}
+	}
+	video := request(http.MethodGet, season+"/Example%20Show%20-%20S01E01%20-%20Pilot.mkv")
+	if video.Code != http.StatusOK || video.Body.String() != "episode bytes" {
+		t.Fatalf("episode GET = %d %q", video.Code, video.Body.String())
+	}
+	poster := request(http.MethodGet, season+"/poster.jpg")
+	if poster.Code != http.StatusOK || poster.Body.String() != "poster bytes" {
+		t.Fatalf("season poster GET = %d %q", poster.Code, poster.Body.String())
 	}
 }
 
