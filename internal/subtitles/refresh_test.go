@@ -98,7 +98,7 @@ func TestRefreshConfirmsUnknownSearchFormatFromDownloadedFilename(t *testing.T) 
 func TestOpenSubtitlesSearchAcceptsNumericProviderIDs(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{"data":[{"id":"candidate-2","attributes":{"language":"en","format":"srt","files":[{"file_id":8,"file_name":"sample.srt"}],"feature_details":{"title":"Sample","year":2020,"tmdb_id":123,"imdb_id":456}}}]}`)
+		_, _ = fmt.Fprint(w, `{"data":[{"id":"candidate-2","attributes":{"language":"en","format":"srt","release":"Sample.2020.1080p","ratings":8.5,"from_trusted":true,"files":[{"file_id":8,"file_name":"sample.srt"}],"feature_details":{"title":"Sample","year":2020,"tmdb_id":123,"imdb_id":456}}}]}`)
 	}))
 	defer server.Close()
 	client, err := NewOpenSubtitles("test-api-key", "", "", &http.Client{Transport: rewriteTransport{target: server.URL}})
@@ -110,7 +110,7 @@ func TestOpenSubtitlesSearchAcceptsNumericProviderIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
-	if len(rows) != 1 || rows[0].TMDbID != "123" || rows[0].IMDbID != "456" {
+	if len(rows) != 1 || rows[0].TMDbID != "123" || rows[0].IMDbID != "456" || rows[0].Ratings != 8.5 || !rows[0].FromTrusted || rows[0].Release != "Sample.2020.1080p" {
 		t.Fatalf("parsed candidates = %#v", rows)
 	}
 }
@@ -135,16 +135,21 @@ func TestRankSubtitleScoresMatchingProviderIDWithoutHash(t *testing.T) {
 		Title:       "Musk", Year: 2026, TMDbID: "1096228",
 	}
 	candidate := Candidate{
-		ID: "candidate", Language: "en", Title: "Musk", Year: 2026,
-		TMDbID: "1096228", Format: "srt", MovieHashMatch: false,
+		ID: "candidate-z", Language: "en", Title: "Musk", Year: 2026,
+		TMDbID: "1096228", Format: "srt", MovieHashMatch: false, DownloadCount: 3391,
 	}
-	selected, confidence, reason, ok := rankSubtitle(q, []Candidate{candidate}, RefreshOptions{
+	preferred := Candidate{
+		ID: "candidate-a", Language: "en", Title: "Musk", Year: 2026,
+		TMDbID: "1096228", Format: "srt", MovieHashMatch: false,
+		DownloadCount: 9000, Ratings: 7.2, FromTrusted: true,
+	}
+	selected, confidence, reason, ok := rankSubtitle(q, []Candidate{candidate, preferred}, RefreshOptions{
 		Formats: []string{"srt"}, MinimumConfidence: 0.84,
 	})
 	if !ok {
 		t.Fatalf("rankSubtitle() rejected provider-ID match: confidence=%.2f reason=%q", confidence, reason)
 	}
-	if selected.ID != candidate.ID || confidence < 0.95 {
-		t.Fatalf("selected=%q confidence=%.2f, want candidate with >=0.95 confidence", selected.ID, confidence)
+	if selected.ID != preferred.ID || confidence < 0.95 {
+		t.Fatalf("selected=%q confidence=%.2f, want popularity/rating/trust-ranked candidate with >=0.95 confidence", selected.ID, confidence)
 	}
 }

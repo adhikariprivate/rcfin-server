@@ -87,11 +87,13 @@ type Candidate struct {
 	ID              string
 	FileID          int64
 	FileName        string
+	Release         string
 	Language        string
 	Format          string
 	HearingImpaired bool
 	Forced          bool
 	MovieHashMatch  bool
+	FromTrusted     bool
 	Title           string
 	Year            int
 	Season          int
@@ -99,6 +101,7 @@ type Candidate struct {
 	TMDbID          string
 	IMDbID          string
 	DownloadCount   int64
+	Ratings         float64
 }
 
 // stringOrNumber handles OpenSubtitles IDs, which the API has returned as
@@ -123,12 +126,15 @@ type searchResponse struct {
 	Data []struct {
 		ID         string `json:"id"`
 		Attributes struct {
-			Language         string `json:"language"`
-			HearingImpaired  bool   `json:"hearing_impaired"`
-			ForeignPartsOnly bool   `json:"foreign_parts_only"`
-			MovieHashMatch   bool   `json:"moviehash_match"`
-			DownloadCount    int64  `json:"download_count"`
-			Format           string `json:"format"`
+			Language         string  `json:"language"`
+			HearingImpaired  bool    `json:"hearing_impaired"`
+			ForeignPartsOnly bool    `json:"foreign_parts_only"`
+			MovieHashMatch   bool    `json:"moviehash_match"`
+			DownloadCount    int64   `json:"download_count"`
+			Ratings          float64 `json:"ratings"`
+			FromTrusted      bool    `json:"from_trusted"`
+			Release          string  `json:"release"`
+			Format           string  `json:"format"`
 			Files            []struct {
 				FileID   int64  `json:"file_id"`
 				FileName string `json:"file_name"`
@@ -196,7 +202,7 @@ func (c *OpenSubtitles) Search(ctx context.Context, q SearchQuery) ([]Candidate,
 			continue
 		}
 		file := a.Files[0]
-		result = append(result, Candidate{ID: row.ID, FileID: file.FileID, FileName: file.FileName, Language: a.Language, HearingImpaired: a.HearingImpaired, Forced: a.ForeignPartsOnly, MovieHashMatch: a.MovieHashMatch, Title: a.Feature.Title, Year: a.Feature.Year, Season: a.Feature.Season, Episode: a.Feature.Episode, TMDbID: string(a.Feature.TMDbID), IMDbID: string(a.Feature.IMDbID), DownloadCount: a.DownloadCount, Format: strings.ToLower(a.Format)})
+		result = append(result, Candidate{ID: row.ID, FileID: file.FileID, FileName: file.FileName, Release: a.Release, Language: a.Language, HearingImpaired: a.HearingImpaired, Forced: a.ForeignPartsOnly, MovieHashMatch: a.MovieHashMatch, FromTrusted: a.FromTrusted, Title: a.Feature.Title, Year: a.Feature.Year, Season: a.Feature.Season, Episode: a.Feature.Episode, TMDbID: string(a.Feature.TMDbID), IMDbID: string(a.Feature.IMDbID), DownloadCount: a.DownloadCount, Ratings: a.Ratings, Format: strings.ToLower(a.Format)})
 	}
 	return result, nil
 }

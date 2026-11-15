@@ -52,18 +52,21 @@ type SubtitleAction struct {
 }
 
 type SubtitleCandidateReport struct {
-	Title           string `json:"title,omitempty"`
-	Year            int    `json:"year,omitempty"`
-	Language        string `json:"language"`
-	Format          string `json:"format"`
-	HearingImpaired bool   `json:"hearing_impaired"`
-	Forced          bool   `json:"forced"`
-	MovieHashMatch  bool   `json:"movie_hash_match"`
-	Season          int    `json:"season,omitempty"`
-	Episode         int    `json:"episode,omitempty"`
-	TMDbID          string `json:"tmdb_id,omitempty"`
-	IMDbID          string `json:"imdb_id,omitempty"`
-	DownloadCount   int64  `json:"download_count,omitempty"`
+	Title           string  `json:"title,omitempty"`
+	Release         string  `json:"release,omitempty"`
+	Year            int     `json:"year,omitempty"`
+	Language        string  `json:"language"`
+	Format          string  `json:"format"`
+	HearingImpaired bool    `json:"hearing_impaired"`
+	Forced          bool    `json:"forced"`
+	MovieHashMatch  bool    `json:"movie_hash_match"`
+	FromTrusted     bool    `json:"from_trusted"`
+	Season          int     `json:"season,omitempty"`
+	Episode         int     `json:"episode,omitempty"`
+	TMDbID          string  `json:"tmdb_id,omitempty"`
+	IMDbID          string  `json:"imdb_id,omitempty"`
+	DownloadCount   int64   `json:"download_count,omitempty"`
+	Ratings         float64 `json:"ratings,omitempty"`
 }
 
 type SubtitleReport struct {
@@ -540,19 +543,30 @@ func rankSubtitle(q queryContext, candidates []Candidate, opts RefreshOptions) (
 		scores = append(scores, scored{c, score})
 	}
 	sort.Slice(scores, func(i, j int) bool {
-		if scores[i].score == scores[j].score {
-			return scores[i].c.ID < scores[j].c.ID
+		if scores[i].score != scores[j].score {
+			return scores[i].score > scores[j].score
 		}
-		return scores[i].score > scores[j].score
+		// Follow Jellyfin's OpenSubtitles ordering when identity confidence is
+		// equal: exact file hash, popularity, rating, then trusted uploader.
+		if scores[i].c.MovieHashMatch != scores[j].c.MovieHashMatch {
+			return scores[i].c.MovieHashMatch
+		}
+		if scores[i].c.DownloadCount != scores[j].c.DownloadCount {
+			return scores[i].c.DownloadCount > scores[j].c.DownloadCount
+		}
+		if scores[i].c.Ratings != scores[j].c.Ratings {
+			return scores[i].c.Ratings > scores[j].c.Ratings
+		}
+		if scores[i].c.FromTrusted != scores[j].c.FromTrusted {
+			return scores[i].c.FromTrusted
+		}
+		return scores[i].c.ID < scores[j].c.ID
 	})
 	if len(scores) == 0 {
 		return Candidate{}, 0, "no candidate matches requested language, flags, and configured subtitle formats", false
 	}
 	if scores[0].score < minimum {
 		return scores[0].c, scores[0].score, "best subtitle match is below confidence threshold", false
-	}
-	if len(scores) > 1 && scores[0].score-scores[1].score < .07 {
-		return scores[0].c, scores[0].score, "top subtitle candidates are too close", false
 	}
 	return scores[0].c, scores[0].score, "", true
 }
@@ -635,17 +649,20 @@ func subtitleCandidateReport(candidate Candidate) *SubtitleCandidateReport {
 	}
 	return &SubtitleCandidateReport{
 		Title:           candidate.Title,
+		Release:         candidate.Release,
 		Year:            candidate.Year,
 		Language:        candidate.Language,
 		Format:          candidateExtension(candidate),
 		HearingImpaired: candidate.HearingImpaired,
 		Forced:          candidate.Forced,
 		MovieHashMatch:  candidate.MovieHashMatch,
+		FromTrusted:     candidate.FromTrusted,
 		Season:          candidate.Season,
 		Episode:         candidate.Episode,
 		TMDbID:          candidate.TMDbID,
 		IMDbID:          candidate.IMDbID,
 		DownloadCount:   candidate.DownloadCount,
+		Ratings:         candidate.Ratings,
 	}
 }
 
