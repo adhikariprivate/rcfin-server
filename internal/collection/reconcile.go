@@ -28,10 +28,11 @@ const (
 const defaultInventoryMissingGrace = 7 * 24 * time.Hour
 
 type InventoryChange struct {
-	Kind    InventoryChangeKind `json:"kind"`
-	Path    string              `json:"path"`
-	OldPath string              `json:"old_path,omitempty"`
-	Entry   InventoryEntry      `json:"entry,omitempty"`
+	Kind          InventoryChangeKind          `json:"kind"`
+	Path          string                       `json:"path"`
+	OldPath       string                       `json:"old_path,omitempty"`
+	Entry         InventoryEntry               `json:"entry,omitempty"`
+	PreviousEntry *model.LibraryInventoryEntry `json:"previous_entry,omitempty"`
 }
 
 type InventoryReconciliation struct {
@@ -177,7 +178,8 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 		if len(oldMatches) != 1 || len(newMatches) != 1 {
 			for _, oldDir := range oldMatches {
 				ambiguousOldPaths[oldDir.Path] = true
-				changes = append(changes, InventoryChange{Kind: InventoryAmbiguous, Path: oldDir.Path, OldPath: oldDir.Path})
+				previous := oldDir
+				changes = append(changes, InventoryChange{Kind: InventoryAmbiguous, Path: oldDir.Path, OldPath: oldDir.Path, PreviousEntry: &previous})
 			}
 			for _, newDir := range newMatches {
 				matchedNew[newDir.Path] = true
@@ -234,7 +236,8 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 		} else if len(oldMatches) > 0 && len(newMatches) > 0 {
 			for _, oldEntry := range oldMatches {
 				ambiguousOldPaths[oldEntry.Path] = true
-				changes = append(changes, InventoryChange{Kind: InventoryAmbiguous, Path: oldEntry.Path, OldPath: oldEntry.Path})
+				previous := oldEntry
+				changes = append(changes, InventoryChange{Kind: InventoryAmbiguous, Path: oldEntry.Path, OldPath: oldEntry.Path, PreviousEntry: &previous})
 			}
 			for _, newEntry := range newMatches {
 				changes = append(changes, InventoryChange{Kind: InventoryAmbiguous, Path: newEntry.Path, Entry: entriesByPath[newEntry.Path]})
@@ -260,7 +263,8 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 				}
 				continue
 			}
-			changes = append(changes, InventoryChange{Kind: InventoryMissing, Path: entry.Path})
+			previous := entry
+			changes = append(changes, InventoryChange{Kind: InventoryMissing, Path: entry.Path, PreviousEntry: &previous})
 			entry.Classification = string(InventoryMissing)
 			if entry.MissingSince == nil {
 				missingAt := completed.UTC()

@@ -136,6 +136,9 @@ func TestReconcileLibraryInventoryRecognizesUniqueRenameAndDuplicateAmbiguity(t 
 		if change.Kind == InventoryMissing {
 			t.Fatalf("ambiguous source was also reported missing: %#v", result.Changes)
 		}
+		if change.Kind == InventoryAmbiguous && change.Path == "a/movie.mkv" && (change.PreviousEntry == nil || change.PreviousEntry.Role != string(InventoryVideo)) {
+			t.Fatalf("ambiguous prior entry lacks review evidence: %#v", change)
+		}
 	}
 	var persistedAmbiguity string
 	for _, entry := range repo.snapshot.Entries {
