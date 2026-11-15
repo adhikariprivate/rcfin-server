@@ -123,7 +123,15 @@ func Refresh(ctx context.Context, coll *collection.Collection, client *OpenSubti
 				}
 				if oldOperation != nil && subtitleJournalSignature(oldOperation.Evidence) == subtitleJobSignature(video, lang, opts) {
 					switch oldOperation.Status {
-					case "needs_review", "failed_terminal":
+					case "needs_review":
+						if oldSubtitleTieNeedsRerank(oldOperation) {
+							// Older ranking versions rejected otherwise valid candidates
+							// on score proximity. Re-run those once with provider ranking.
+							break
+						}
+						report.Actions = append(report.Actions, SubtitleAction{Source: video.Path, Language: lang, ProviderID: oldOperation.ProviderID, Confidence: oldOperation.Confidence, State: oldOperation.Status, Reason: oldOperation.Error})
+						continue
+					case "failed_terminal":
 						report.Actions = append(report.Actions, SubtitleAction{Source: video.Path, Language: lang, ProviderID: oldOperation.ProviderID, Confidence: oldOperation.Confidence, State: oldOperation.Status, Reason: oldOperation.Error})
 						continue
 					case "failed_retryable":
@@ -244,6 +252,10 @@ func Refresh(ctx context.Context, coll *collection.Collection, client *OpenSubti
 		return report, journalErr
 	}
 	return report, nil
+}
+
+func oldSubtitleTieNeedsRerank(operation *model.MediaOperation) bool {
+	return operation != nil && operation.Status == "needs_review" && operation.Error == "top subtitle candidates are too close"
 }
 
 type subtitleJobEvidence struct {

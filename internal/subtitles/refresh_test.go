@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/adhikariprivate/rcfin-server/internal/collection"
+	"github.com/adhikariprivate/rcfin-server/internal/database/model"
 	"github.com/adhikariprivate/rcfin-server/internal/rclonestore"
 )
 
@@ -151,5 +152,16 @@ func TestRankSubtitleScoresMatchingProviderIDWithoutHash(t *testing.T) {
 	}
 	if selected.ID != preferred.ID || confidence < 0.95 {
 		t.Fatalf("selected=%q confidence=%.2f, want popularity/rating/trust-ranked candidate with >=0.95 confidence", selected.ID, confidence)
+	}
+}
+
+func TestLegacyCloseTieReviewIsEligibleForProviderReranking(t *testing.T) {
+	legacy := &model.MediaOperation{Status: "needs_review", Error: "top subtitle candidates are too close"}
+	if !oldSubtitleTieNeedsRerank(legacy) {
+		t.Fatal("legacy close-tie review was not scheduled for reranking")
+	}
+	other := &model.MediaOperation{Status: "needs_review", Error: "best subtitle match is below confidence threshold"}
+	if oldSubtitleTieNeedsRerank(other) {
+		t.Fatal("low-confidence review was incorrectly scheduled for reranking")
 	}
 }
