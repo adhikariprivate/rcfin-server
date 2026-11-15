@@ -494,11 +494,15 @@ func TestReconcileLibraryInventoryUsesConfiguredMissingGrace(t *testing.T) {
 	if _, err := ReconcileLibraryInventory(context.Background(), repo, "movies", nil, missingAt, versions); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReconcileLibraryInventory(context.Background(), repo, "movies", nil, missingAt.Add(2*time.Hour), versions); err != nil {
+	result, err := ReconcileLibraryInventory(context.Background(), repo, "movies", nil, missingAt.Add(2*time.Hour), versions)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if len(repo.snapshot.Entries) != 0 {
 		t.Fatalf("expired tombstone remains in inventory: %#v", repo.snapshot.Entries)
+	}
+	if len(result.Changes) != 1 || result.Changes[0].Kind != InventoryDeleted {
+		t.Fatalf("expired tombstone was not reported as missing: %#v", result.Changes)
 	}
 }
 

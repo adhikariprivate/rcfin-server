@@ -23,6 +23,7 @@ const (
 	InventoryMoved     InventoryChangeKind = "moved"
 	InventoryAmbiguous InventoryChangeKind = "ambiguous"
 	InventoryMissing   InventoryChangeKind = "missing_candidate"
+	InventoryDeleted   InventoryChangeKind = "missing"
 )
 
 const defaultInventoryMissingGrace = 7 * 24 * time.Hour
@@ -305,16 +306,18 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 				}
 				continue
 			}
-			previous := entry
-			changes = append(changes, InventoryChange{Kind: InventoryMissing, Path: entry.Path, PreviousEntry: &previous})
-			entry.Classification = string(InventoryMissing)
 			if entry.MissingSince == nil {
 				missingAt := completed.UTC()
 				entry.MissingSince = &missingAt
 			}
-			if completed.Sub(*entry.MissingSince) < missingGrace {
-				current = append(current, entry)
+			previous := entry
+			if completed.Sub(*entry.MissingSince) >= missingGrace {
+				changes = append(changes, InventoryChange{Kind: InventoryDeleted, Path: entry.Path, PreviousEntry: &previous})
+				continue
 			}
+			changes = append(changes, InventoryChange{Kind: InventoryMissing, Path: entry.Path, PreviousEntry: &previous})
+			entry.Classification = string(InventoryMissing)
+			current = append(current, entry)
 		}
 	}
 	classificationByPath := make(map[string]InventoryChangeKind, len(changes))
