@@ -3,6 +3,7 @@ package collection
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -92,6 +93,32 @@ func TestReconcileLibraryInventoryRecognizesUniqueRenameAndDuplicateAmbiguity(t 
 	}
 }
 
+func TestReconcileLibraryInventoryRecognizesFolderRenameWithoutNewWork(t *testing.T) {
+	repo := &memoryInventoryRepo{}
+	_, err := ReconcileLibraryInventory(context.Background(), repo, "movies", []InventoryEntry{
+		{Path: "Old", Scope: InventoryScopeLibrary, Role: InventoryOther, IsDir: true, ModTime: 20},
+		{Path: "Old/Movie.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, Size: 100, ModTime: 20},
+	}, time.Unix(100, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := ReconcileLibraryInventory(context.Background(), repo, "movies", []InventoryEntry{
+		{Path: "Renamed", Scope: InventoryScopeLibrary, Role: InventoryOther, IsDir: true, ModTime: 40},
+		{Path: "Renamed/Movie.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, Size: 100, ModTime: 20},
+	}, time.Unix(200, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Changes) != 2 {
+		t.Fatalf("folder move should produce exactly two move records, got %#v", result.Changes)
+	}
+	for _, change := range result.Changes {
+		if change.Kind != InventoryMoved || !strings.HasPrefix(change.OldPath, "Old") || !strings.HasPrefix(change.Path, "Renamed") {
+			t.Fatalf("folder move produced a false add/remove: %#v", result.Changes)
+		}
+	}
+}
+
 func TestReconcileLibraryInventoryDoesNotReplaceSnapshotWhenSaveFails(t *testing.T) {
 	previous := &model.LibraryInventorySnapshot{Generation: 4}
 	repo := &memoryInventoryRepo{snapshot: previous, err: errors.New("db unavailable")}
@@ -138,7 +165,7 @@ func TestReconcileLibraryInventoryRetainsMissingTombstoneAndClearsOnReappearance
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Changes) != 1 || result.Changes[0].Kind != InventoryMissing || len(repo.snapshot.Entries) != 1 || repo.snapshot.Entries[0].MissingSince.IsZero() {
+	if len(result.Changes) != 1 || result.Changes[0].Kind != InventoryMissing || len(repo.snapshot.Entries) != 1 || repo.snapshot.Entries[0].MissingSince == nil {
 		t.Fatalf("first missing generation = %#v, snapshot=%#v", result.Changes, repo.snapshot.Entries)
 	}
 	result, err = ReconcileLibraryInventory(context.Background(), repo, "movies", []InventoryEntry{{
@@ -147,7 +174,7 @@ func TestReconcileLibraryInventoryRetainsMissingTombstoneAndClearsOnReappearance
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Changes) != 1 || result.Changes[0].Kind != InventoryChanged || !repo.snapshot.Entries[0].MissingSince.IsZero() {
+	if len(result.Changes) != 1 || result.Changes[0].Kind != InventoryChanged || repo.snapshot.Entries[0].MissingSince != nil {
 		t.Fatalf("reappeared object was not revived cleanly: %#v %#v", result.Changes, repo.snapshot.Entries)
 	}
 }
