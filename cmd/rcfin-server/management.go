@@ -91,7 +91,13 @@ func runManagementCommand(configPath string, args []string) error {
 		if len(args) >= 2 && args[1] == "inbox" {
 			return runLibraryInboxCommand(ctx, repo, config, args[2:])
 		}
-		return errors.New("usage: rcfin library <list|scan LIBRARY_ID|status LIBRARY_ID|refresh metadata|subtitles LIBRARY_ID|inbox stage LIBRARY_ID ITEM_PATH>")
+		if len(args) >= 2 && args[1] == "organize" {
+			return runLibraryOrganizeCommand(ctx, repo, config, args[2:])
+		}
+		if len(args) >= 2 && args[1] == "retry" {
+			return runMediaCommand(ctx, repo, config.Collections, append([]string{"retry"}, args[2:]...))
+		}
+		return errors.New("usage: rcfin library <list|scan LIBRARY_ID [--full]|status LIBRARY_ID|refresh metadata|subtitles LIBRARY_ID|retry LIBRARY_ID ITEM_KEY ACTION|inbox stage LIBRARY_ID ITEM_PATH|organize plan|apply LIBRARY_ID>")
 	case "user":
 		return runUserCommand(ctx, repo, config.Collections, args[1:])
 	case "media":
@@ -99,6 +105,148 @@ func runManagementCommand(configPath string, args []string) error {
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func runLibraryOrganizeCommand(ctx context.Context, repo database.Repository, config configFile, args []string) error {
+	if len(args) < 2 || (args[0] != "plan" && args[0] != "apply") {
+		return errors.New("usage: rcfin library organize <plan|apply> LIBRARY_ID [--item PATH] [--existing] [--yes]")
+	}
+	action, libraryID := args[0], args[1]
+	flags := pflag.NewFlagSet("library organize", pflag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	itemPath := flags.String("item", "", "Scope organization to one relative item path")
+	existing := flags.Bool("existing", false, "Normalize existing library paths instead of Inbox items")
+	yes := flags.Bool("yes", false, "Confirm the configured organization operation")
+	if err := flags.Parse(args[2:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("unexpected arguments after library organize flags")
+	}
+	if action == "apply" && !*yes {
+		return errors.New("library organize apply requires --yes after reviewing the plan")
+	}
+	var selected *collectionConfig
+	for i := range config.Collections {
+		if config.Collections[i].ID == libraryID {
+			selected = &config.Collections[i]
+			break
+		}
+	}
+	if selected == nil {
+		return fmt.Errorf("unknown library ID %q", libraryID)
+	}
+	policy := selected.Media.Organize
+	if action == "apply" {
+		if *existing {
+			if !selected.Media.NormalizeExisting.Enabled {
+				return errors.New("enable media.normalize_existing.enabled before applying existing-path normalization")
+			}
+			if selected.Media.NormalizeExisting.DryRun {
+				return errors.New("set media.normalize_existing.dry_run: false before applying existing-path normalization")
+			}
+		} else {
+			if !policy.Enabled {
+				return errors.New("enable media.organize.enabled before applying Inbox organization")
+			}
+			if policy.DryRun {
+				return errors.New("set media.organize.dry_run: false before applying Inbox organization")
+			}
+		}
+	}
+	if err := rclonestore.Configure(config.Rclone.Config, config.Rclone.CacheDir); err != nil {
+		return fmt.Errorf("configure Rclone: %w", err)
+	}
+	storage, err := rclonestore.New(ctx, selected.Remote, selected.VFS)
+	if err != nil {
+		return fmt.Errorf("open library %q: %w", libraryID, err)
+	}
+	defer storage.Close()
+	inbox := selected.Media.InboxPath
+	if inbox == "" {
+		inbox = ".Inbox"
+	}
+	coll := &collection.Collection{ID: selected.ID, Name: selected.Name, Type: collection.CollectionType(selected.Type), Remote: selected.Remote, Storage: storage, InboxPath: inbox}
+	storage.FlushDirCache()
+	inventory, err := collection.InventoryLibrary(ctx, coll, inbox)
+	if err != nil {
+		return fmt.Errorf("inventory library: %w", err)
+	}
+	if *itemPath != "" {
+		clean := path.Clean(*itemPath)
+		if path.IsAbs(*itemPath) || clean != *itemPath || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.Contains(*itemPath, "\\") {
+			return fmt.Errorf("item path must be a clean relative path within the library")
+		}
+	}
+	metadataPolicy := selected.Media.Metadata
+	keyEnv := strings.TrimSpace(metadataPolicy.APIKeyEnv)
+	if keyEnv == "" {
+		keyEnv = "RCFIN_TMDB_API_KEY"
+	}
+	client, err := provider.NewTMDb(os.Getenv(keyEnv), mediaHTTPClient(metadataPolicy.RequestTimeout))
+	if err != nil {
+		return fmt.Errorf("organization provider credentials are unavailable in %s", keyEnv)
+	}
+	if metadataPolicy.RetryLimit > 0 {
+		client.SetRetryLimit(metadataPolicy.RetryLimit)
+	}
+	folderFormat := policy.FolderFormat
+	if selected.Type == "shows" && policy.SeriesFormat != "" {
+		folderFormat = policy.SeriesFormat
+	}
+	stableFor := 10 * time.Minute
+	stableValue := selected.Media.Inbox.StableFor
+	if strings.TrimSpace(stableValue) == "" {
+		stableValue = policy.StableFor
+	}
+	if strings.TrimSpace(stableValue) != "" {
+		stableFor, err = time.ParseDuration(stableValue)
+		if err != nil || stableFor <= 0 {
+			return fmt.Errorf("invalid Inbox stable_for %q", stableValue)
+		}
+	}
+	marker := selected.Media.Inbox.CompletionMarker
+	if strings.TrimSpace(marker) == "" {
+		marker = policy.CompletionMarker
+	}
+	opts := organization.Options{
+		Inventory: inventory, IncludeProviderID: policy.IncludeProviderID, EnableDiscFolders: policy.DiscFolders,
+		FlattenGroupingDirectories: !policy.PreserveGroupingDirectories, MinimumConfidence: policy.MinimumConfidence,
+		FolderFormat: folderFormat, FileFormat: policy.FileFormat, SeasonFormat: policy.SeasonFormat, EpisodeFormat: policy.EpisodeFormat,
+		Language: metadataPolicy.Language, FallbackLanguages: policy.EpisodeFallbackLanguages, AllowedExtensions: policy.AllowedExtensions,
+		StableFor: stableFor, CompletionMarker: marker,
+	}
+	if *itemPath != "" {
+		if *existing {
+			filtered := make([]collection.InventoryEntry, 0)
+			for _, entry := range inventory {
+				if entry.Scope == collection.InventoryScopeLibrary && (entry.Path == *itemPath || strings.HasPrefix(entry.Path, *itemPath+"/")) {
+					filtered = append(filtered, entry)
+				}
+			}
+			opts.Inventory = filtered
+		} else {
+			root := organization.InboxItemRoot(*itemPath, coll.Type)
+			opts.ItemRoots = []string{root}
+		}
+	}
+	dryRun := action == "plan"
+	var report organization.Report
+	if coll.Type == collection.CollectionTypeShows {
+		if *existing {
+			report, err = organization.OrganizeExistingShows(ctx, coll, client, repo, opts, dryRun, "")
+		} else {
+			report, err = organization.OrganizeInboxShows(ctx, coll, client, repo, opts, dryRun, "")
+		}
+	} else if *existing {
+		report, err = organization.OrganizeExistingMovies(ctx, coll, client, repo, opts, dryRun, "")
+	} else {
+		report, err = organization.OrganizeInboxMovies(ctx, coll, client, repo, opts, dryRun, "")
+	}
+	if err != nil {
+		return fmt.Errorf("%s organization for %q: %w", action, libraryID, err)
+	}
+	return json.NewEncoder(os.Stdout).Encode(report)
 }
 
 func runLibraryInboxCommand(ctx context.Context, repo database.Repository, config configFile, args []string) error {
@@ -337,8 +485,8 @@ func selectRefreshPaths(inventory []collection.InventoryEntry, requested string)
 }
 
 func runLibraryScanCommand(ctx context.Context, repo database.Repository, config configFile, args []string) error {
-	if len(args) != 1 {
-		return errors.New("usage: rcfin library scan LIBRARY_ID")
+	if len(args) < 1 || len(args) > 2 || (len(args) == 2 && args[1] != "--full") {
+		return errors.New("usage: rcfin library scan LIBRARY_ID [--full]")
 	}
 	libraryID := args[0]
 	var selected *collectionConfig

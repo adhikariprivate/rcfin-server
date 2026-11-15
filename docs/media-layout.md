@@ -253,7 +253,16 @@ LIBRARY [--item PATH]` and `rcfin library refresh subtitles LIBRARY [--item
 PATH] [--language LANG]` explicitly request provider work; `--replace` is scoped
 to the selected stage. `rcfin library inbox stage LIBRARY ITEM_PATH` queues a
 same-library move into Inbox, where ordinary transfer-readiness checks apply.
-The running server recovers queued operations during its next library cycle.
+Use `rcfin library organize plan LIBRARY [--item PATH] [--existing]` to review
+the proposed paths. After reviewing the report, `rcfin library organize apply
+LIBRARY --yes [--item PATH] [--existing]` executes the configured operation;
+apply requires the relevant organization feature enabled and its `dry_run`
+setting disabled. Existing-path normalization additionally requires
+`media.normalize_existing.enabled`. `rcfin library retry LIBRARY ITEM_KEY
+ACTION` retries a failed journal operation. The running server recovers queued
+operations during its next library cycle. `rcfin library scan LIBRARY --full`
+is an explicit full remote listing; ordinary scans already reconcile a full
+listing, and scans do not imply provider refresh.
 
 Workers renew active media-operation leases during long provider or storage
 work. If a repository reports that a worker no longer owns a lease, its
