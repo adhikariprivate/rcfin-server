@@ -46,7 +46,9 @@ type Options struct {
 type requestKey struct{}
 
 type requestTree struct {
-	nodes map[string]*node
+	nodes         map[string]*node
+	locations     map[string]map[string]model.LibraryInventoryEntry
+	itemLocations map[string]map[string]string
 }
 
 type node struct {
@@ -82,8 +84,9 @@ func New(options Options) http.Handler {
 	if !strings.HasPrefix(base, "/") {
 		base = "/" + base
 	}
-	if !strings.HasSuffix(base, "/") {
-		base += "/"
+	base = path.Clean(base)
+	if base == "." {
+		base = "/dav"
 	}
 	if options.CacheTTL <= 0 {
 		options.CacheTTL = time.Minute
@@ -146,11 +149,27 @@ func (s *Server) buildTree(ctx context.Context, user *model.User) (*requestTree,
 		return cached.tree, nil
 	}
 	s.cacheMu.Unlock()
-	t := &requestTree{nodes: map[string]*node{"/": {name: "/", dir: true, modTime: time.Now().UTC(), children: map[string]*node{}}}}
+	t := &requestTree{nodes: map[string]*node{"/": {name: "/", dir: true, modTime: time.Now().UTC(), children: map[string]*node{}}}, locations: map[string]map[string]model.LibraryInventoryEntry{}, itemLocations: map[string]map[string]string{}}
 	for _, c := range s.collections.SnapshotCollections() {
 		cfg := s.libraries[c.ID]
 		if !cfg.Enabled || !canAccess(user, c.ID) {
 			continue
+		}
+		if s.repo != nil {
+			snapshot, err := s.repo.GetLibraryInventory(ctx, c.ID)
+			if err != nil {
+				return nil, fmt.Errorf("load inventory for %q: %w", c.ID, err)
+			}
+			if snapshot != nil {
+				t.locations[c.ID] = make(map[string]model.LibraryInventoryEntry, len(snapshot.Entries))
+				t.itemLocations[c.ID] = map[string]string{}
+				for _, entry := range snapshot.Entries {
+					t.locations[c.ID][entry.Path] = entry
+					if entry.IsDir && entry.Scope == "library" && entry.JellyfinID != "" && entry.MissingSince == nil {
+						t.itemLocations[c.ID][entry.JellyfinID] = entry.Path
+					}
+				}
+			}
 		}
 		root := t.ensureDir(t.nodes["/"], safeName(c.Name))
 		views := cfg.Views
@@ -270,8 +289,21 @@ func (s *Server) addItem(t *requestTree, c collection.Collection, cfg LibraryCon
 		if fileFormat != "" {
 			filename = formatName(fileFormat, item, sourceFile)
 		}
+		if _, ok := item.(*collection.Movie); ok {
+			if location := t.itemLocations[c.ID][item.ID()]; location != "" {
+				sourceDir = location
+			}
+		}
 		source := path.Join(sourceDir, sourceFile)
-		video := &node{name: filename, size: item.FileSize(), modTime: time.Now().UTC(), open: func() (http.File, error) { return c.Storage.OpenFile(source) }}
+		size := item.FileSize()
+		if inventory := t.locations[c.ID]; inventory != nil {
+			entry, found := inventory[source]
+			if !found || entry.Scope != "library" || entry.Role != "video" || entry.IsDir || entry.MissingSince != nil {
+				return
+			}
+			source, size = entry.Path, entry.Size
+		}
+		video := &node{name: filename, size: size, modTime: time.Now().UTC(), open: func() (http.File, error) { return c.Storage.OpenFile(source) }}
 		t.add(dir, video)
 		if !cfg.ShowNFO && !cfg.ShowArtwork {
 			continue

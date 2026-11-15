@@ -637,7 +637,11 @@ func runServer() {
 		if config.WebDAV.Cache.DirectoryTTL != "" {
 			cacheTTL, _ = time.ParseDuration(config.WebDAV.Cache.DirectoryTTL)
 		}
-		r.PathPrefix(davPath).Handler(virtualdav.New(virtualdav.Options{Path: davPath, Collections: collection, Repo: repo, Libraries: libraries, CacheTTL: cacheTTL}))
+		webdavPrefix := strings.TrimSuffix(davPath, "/")
+		if webdavPrefix == "" {
+			webdavPrefix = "/dav"
+		}
+		r.PathPrefix(webdavPrefix).Handler(virtualdav.New(virtualdav.Options{Path: webdavPrefix, Collections: collection, Repo: repo, Libraries: libraries, CacheTTL: cacheTTL}))
 		log.Printf("Read-only WebDAV enabled at %s", davPath)
 	}
 
