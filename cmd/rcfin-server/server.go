@@ -32,6 +32,7 @@ import (
 	"github.com/adhikariprivate/rcfin-server/internal/organization"
 	"github.com/adhikariprivate/rcfin-server/internal/rclonestore"
 	"github.com/adhikariprivate/rcfin-server/internal/subtitles"
+	virtualdav "github.com/adhikariprivate/rcfin-server/internal/webdav"
 )
 
 // Set via ldflags by GoReleaser (see .goreleaser.yaml).
@@ -63,7 +64,14 @@ type configFile struct {
 		CacheDir string `mapstructure:"cache_dir"`
 	} `mapstructure:"rclone"`
 	Collections []collectionConfig `mapstructure:"collections"`
-	Jellyfin    struct {
+	WebDAV      struct {
+		Enabled bool   `mapstructure:"enabled"`
+		Path    string `mapstructure:"path"`
+		Cache   struct {
+			DirectoryTTL string `mapstructure:"directory_ttl"`
+		} `mapstructure:"cache"`
+	} `mapstructure:"webdav"`
+	Jellyfin struct {
 		ServerID           string `mapstructure:"server_id"`
 		ServerName         string `mapstructure:"server_name"`
 		QuickConnect       bool   `mapstructure:"quick_connect"`
@@ -78,6 +86,16 @@ type collectionConfig struct {
 	Remote string         `mapstructure:"remote"`
 	VFS    map[string]any `mapstructure:"vfs"`
 	Media  mediaConfig    `mapstructure:"media"`
+	WebDAV struct {
+		Enabled     bool              `mapstructure:"enabled"`
+		Views       []string          `mapstructure:"views"`
+		Labels      map[string]string `mapstructure:"labels"`
+		FileName    string            `mapstructure:"file_name"`
+		TitleFolder string            `mapstructure:"title_folder"`
+		EpisodeName string            `mapstructure:"episode_file_name"`
+		NFO         bool              `mapstructure:"nfo"`
+		Artwork     bool              `mapstructure:"artwork"`
+	} `mapstructure:"webdav"`
 }
 
 // Media options are intentionally opt-in. Organization stays disabled and
@@ -203,6 +221,18 @@ func readConfig(filename string) (configFile, error) {
 		return configFile{}, err
 	}
 	for i := range config.Collections {
+		if !v.IsSet(fmt.Sprintf("collections.%d.webdav.enabled", i)) {
+			config.Collections[i].WebDAV.Enabled = true
+		}
+		if !v.IsSet(fmt.Sprintf("collections.%d.webdav.views", i)) {
+			config.Collections[i].WebDAV.Views = []string{"all", "genres", "actors", "directors", "years"}
+		}
+		if !v.IsSet(fmt.Sprintf("collections.%d.webdav.nfo", i)) {
+			config.Collections[i].WebDAV.NFO = true
+		}
+		if !v.IsSet(fmt.Sprintf("collections.%d.webdav.artwork", i)) {
+			config.Collections[i].WebDAV.Artwork = true
+		}
 		if !v.IsSet(fmt.Sprintf("collections.%d.media.metadata.overwrite_artwork", i)) {
 			config.Collections[i].Media.Metadata.OverwriteArtwork = config.Collections[i].Media.Metadata.OverwriteExisting
 		}
@@ -220,6 +250,31 @@ func readConfig(filename string) (configFile, error) {
 		}
 	}
 	applyLegacyJellyfinConfig(v, &config)
+	if config.WebDAV.Enabled {
+		davPath := config.WebDAV.Path
+		if davPath == "" {
+			davPath = "/dav/"
+		}
+		clean := path.Clean(davPath)
+		if !strings.HasPrefix(davPath, "/") || clean == "/" || clean != strings.TrimSuffix(davPath, "/") {
+			return configFile{}, fmt.Errorf("webdav.path must be a non-root absolute URL path without dot segments")
+		}
+		for i, lib := range config.Collections {
+			for _, view := range lib.WebDAV.Views {
+				switch strings.ToLower(view) {
+				case "all", "genres", "actors", "directors", "years", "studios":
+				default:
+					return configFile{}, fmt.Errorf("collections[%d].webdav.views contains unsupported view %q", i, view)
+				}
+			}
+		}
+		if config.WebDAV.Cache.DirectoryTTL != "" {
+			ttl, err := time.ParseDuration(config.WebDAV.Cache.DirectoryTTL)
+			if err != nil || ttl <= 0 {
+				return configFile{}, fmt.Errorf("webdav.cache.directory_ttl must be a positive duration")
+			}
+		}
+	}
 	return config, nil
 }
 
@@ -569,6 +624,22 @@ func runServer() {
 		ImageQualityPoster: config.Jellyfin.ImageQualityPoster,
 	})
 	j.RegisterHandlers(r)
+	if config.WebDAV.Enabled {
+		davPath := config.WebDAV.Path
+		if davPath == "" {
+			davPath = "/dav/"
+		}
+		libraries := make(map[string]virtualdav.LibraryConfig, len(config.Collections))
+		for _, lib := range config.Collections {
+			libraries[lib.ID] = virtualdav.LibraryConfig{Enabled: lib.WebDAV.Enabled, Views: lib.WebDAV.Views, Labels: lib.WebDAV.Labels, FileName: lib.WebDAV.FileName, TitleFolder: lib.WebDAV.TitleFolder, EpisodeName: lib.WebDAV.EpisodeName, ShowNFO: lib.WebDAV.NFO, ShowArtwork: lib.WebDAV.Artwork}
+		}
+		cacheTTL := time.Minute
+		if config.WebDAV.Cache.DirectoryTTL != "" {
+			cacheTTL, _ = time.ParseDuration(config.WebDAV.Cache.DirectoryTTL)
+		}
+		r.PathPrefix(davPath).Handler(virtualdav.New(virtualdav.Options{Path: davPath, Collections: collection, Repo: repo, Libraries: libraries, CacheTTL: cacheTTL}))
+		log.Printf("Read-only WebDAV enabled at %s", davPath)
+	}
 
 	r.Path("/robots.txt").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

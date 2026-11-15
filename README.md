@@ -80,6 +80,17 @@ Current providers:
 
 RCFin supports account authentication, library and item browsing, search, movie and TV metadata, artwork, playback information, direct video streaming, external subtitle tracks, and user playback state. API coverage is intentionally partial and focused on tested client workflows.
 
+### Read-only virtual WebDAV
+
+RCFin can expose libraries through a virtual, read-only WebDAV tree at `/dav/`.
+It builds **All**, **Genres**, **Actors**, **Directors**, and **Years** views
+from the library catalog, with Kodi-friendly NFO and artwork sidecars. Virtual
+paths resolve to the current media paths in Rclone; they do not create or
+rename remote files. WebDAV uses RCFin usernames and passwords and the same
+per-library access grants as Jellyfin clients. Every authorized client sees
+the same configured views and sidecars. See [Virtual WebDAV](docs/webdav.md)
+for setup, configuration, and client mounting details.
+
 ## Quick start
 
 Install the Go version pinned by [mise](https://mise.jdx.dev/), prepare a configuration, then build and run:

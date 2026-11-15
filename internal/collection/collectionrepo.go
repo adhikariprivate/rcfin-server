@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/adhikariprivate/rcfin-server/internal/collection/search"
@@ -27,6 +28,7 @@ type CollectionRepo struct {
 	bleveIndex     *search.Search
 	rescanInterval time.Duration
 	refreshMu      sync.Mutex
+	catalogVersion atomic.Uint64
 }
 
 type Options struct {
@@ -109,7 +111,11 @@ func (cr *CollectionRepo) InitContext(ctx context.Context) error {
 		return err
 	}
 	// Build search index
-	return cr.BuildSearchIndex(ctx)
+	if err := cr.BuildSearchIndex(ctx); err != nil {
+		return err
+	}
+	cr.catalogVersion.Add(1)
+	return nil
 }
 
 // Background keeps scanning the repository for content changes continously.
@@ -142,7 +148,9 @@ func (cr *CollectionRepo) Refresh(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
-	cr.BuildSearchIndex(ctx)
+	if err := cr.BuildSearchIndex(ctx); err == nil {
+		cr.catalogVersion.Add(1)
+	}
 }
 
 // RefreshCollection rescans one collection and rebuilds the shared search
@@ -169,7 +177,11 @@ func (cr *CollectionRepo) RefreshCollection(ctx context.Context, collectionID st
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return cr.BuildSearchIndex(ctx)
+	if err := cr.BuildSearchIndex(ctx); err != nil {
+		return err
+	}
+	cr.catalogVersion.Add(1)
+	return nil
 }
 
 // RefreshCollectionWithInventory updates Jellyfin's in-memory library model
@@ -219,7 +231,11 @@ func (cr *CollectionRepo) RefreshCollectionWithInventory(ctx context.Context, co
 			return fmt.Errorf("persist stable Jellyfin item IDs: %w", err)
 		}
 	}
-	return cr.BuildSearchIndex(ctx)
+	if err := cr.BuildSearchIndex(ctx); err != nil {
+		return err
+	}
+	cr.catalogVersion.Add(1)
+	return nil
 }
 
 func (cr *CollectionRepo) persistCatalogModelState(ctx context.Context, snapshot *model.LibraryInventorySnapshot, items []Item, inventory []InventoryEntry) error {
@@ -376,6 +392,21 @@ func (cr *CollectionRepo) loadStableItemIDs(ctx context.Context, collectionID st
 func (cr *CollectionRepo) GetCollections() Collections {
 	return cr.collections
 }
+
+// SnapshotCollections returns collection item slices safe to read while a
+// refresh replaces the live catalog.
+func (cr *CollectionRepo) SnapshotCollections() Collections {
+	cr.refreshMu.Lock()
+	defer cr.refreshMu.Unlock()
+	result := append(Collections(nil), cr.collections...)
+	for i := range result {
+		result[i].Items = append([]Item(nil), result[i].Items...)
+	}
+	return result
+}
+
+// CatalogVersion increments after each successful complete catalog rebuild.
+func (cr *CollectionRepo) CatalogVersion() uint64 { return cr.catalogVersion.Load() }
 
 // Inventory returns a deterministic read-only inventory for a configured
 // collection. Set inboxOnly to inspect only the explicitly configured intake

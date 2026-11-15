@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/spf13/viper"
@@ -24,6 +26,35 @@ func TestValidateCollectionsRequiresUniqueStableIDs(t *testing.T) {
 				t.Fatal("expected collection validation error")
 			}
 		})
+	}
+}
+
+func TestReadConfigEnablesConfiguredWebDAVDefaults(t *testing.T) {
+	filename := filepath.Join(t.TempDir(), "rcfin.yaml")
+	contents := `webdav:
+  enabled: true
+  path: /dav/
+  cache:
+    directory_ttl: 5m
+collections:
+  - id: movies
+    name: Movies
+    type: movies
+    remote: /media/movies
+`
+	if err := os.WriteFile(filename, []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := readConfig(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !config.WebDAV.Enabled || config.WebDAV.Path != "/dav/" || config.WebDAV.Cache.DirectoryTTL != "5m" {
+		t.Fatalf("WebDAV settings = %#v", config.WebDAV)
+	}
+	lib := config.Collections[0].WebDAV
+	if !lib.Enabled || !lib.NFO || !lib.Artwork || len(lib.Views) != 5 {
+		t.Fatalf("collection WebDAV defaults = %#v", lib)
 	}
 }
 

@@ -44,6 +44,14 @@ jellyfin:
   quick_connect: false
   image_quality_poster: 40
 
+# Optional read-only virtual WebDAV view. All configured views, NFO files, and
+# artwork are visible to every user who has access to the corresponding library.
+webdav:
+  enabled: true
+  path: /dav/
+  cache:
+    directory_ttl: 5m
+
 collections:
   - id: movies # Required stable ID used by account library grants; keep it unchanged.
     name: Movies
@@ -125,6 +133,19 @@ collections:
       vfs_read_chunk_size: 32M
       vfs_read_chunk_size_limit: 256M
       vfs_handle_caching: 1m
+    webdav:
+      enabled: true
+      views: [all, genres, actors, directors, years]
+      labels:
+        all: All
+        genres: Genres
+        actors: Actors
+        directors: Directors
+        years: Years
+      file_name: "{title} ({year}).{ext}"
+      title_folder: "{title} ({year})"
+      nfo: true
+      artwork: true
 
   - id: shows
     name: TV Shows
@@ -196,3 +217,9 @@ collections:
       vfs_read_chunk_size: 32M
       vfs_read_chunk_size_limit: 256M
       vfs_handle_caching: 1m
+    webdav:
+      enabled: true
+      views: [all, genres, actors, directors, years]
+      episode_file_name: "{series} - S{season:02}E{episode:02} - {episode_title}.{ext}"
+      nfo: true
+      artwork: true
