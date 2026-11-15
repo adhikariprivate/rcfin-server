@@ -166,8 +166,14 @@ func runLibraryItemCommand(ctx context.Context, repo database.Repository, config
 	if err := repo.UpdateLibraryInventorySnapshot(ctx, snapshot); err != nil {
 		return fmt.Errorf("persist adopted move: %w", err)
 	}
-	change := collection.InventoryChange{Kind: collection.InventoryMoved, OldPath: *fromPath, Path: *toPath}
-	if err := relinkMovedMediaOperations(ctx, repo, libraryID, coll.Type, []collection.InventoryChange{change}, inventory); err != nil {
+	moves := make([]collection.InventoryChange, 0)
+	for _, entry := range snapshot.Entries {
+		if !entry.MoveRelinkPending || entry.Path != *toPath && !strings.HasPrefix(entry.Path, *toPath+"/") {
+			continue
+		}
+		moves = append(moves, collection.InventoryChange{Kind: collection.InventoryMoved, OldPath: entry.PreviousPath, Path: entry.Path})
+	}
+	if err := relinkMovedMediaOperations(ctx, repo, libraryID, coll.Type, moves, inventory); err != nil {
 		return fmt.Errorf("relink adopted move operations: %w", err)
 	}
 	return json.NewEncoder(os.Stdout).Encode(struct {
