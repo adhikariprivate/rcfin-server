@@ -706,6 +706,9 @@ func runLibraryScanCommand(ctx context.Context, repo database.Repository, config
 		inbox = ".Inbox"
 	}
 	coll := &collection.Collection{ID: selected.ID, Name: selected.Name, Type: collection.CollectionType(selected.Type), Remote: selected.Remote, Storage: storage, InboxPath: inbox}
+	// A manual scan must observe the current remote just like the background
+	// cycle; otherwise a long VFS directory cache can hide recent changes.
+	storage.FlushDirCache()
 	entries, err := collection.InventoryLibrary(ctx, coll, inbox)
 	if err != nil {
 		return fmt.Errorf("inventory library: %w", err)
