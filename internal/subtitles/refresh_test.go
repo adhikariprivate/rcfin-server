@@ -14,6 +14,7 @@ import (
 
 	"github.com/adhikariprivate/rcfin-server/internal/collection"
 	"github.com/adhikariprivate/rcfin-server/internal/database/model"
+	"github.com/adhikariprivate/rcfin-server/internal/database/sqlite"
 	"github.com/adhikariprivate/rcfin-server/internal/rclonestore"
 )
 
@@ -86,9 +87,14 @@ func TestRefreshConfirmsUnknownSearchFormatFromDownloadedFilename(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	repo, err := sqlite.New(&sqlite.ConfigFile{Filename: filepath.Join(t.TempDir(), "operations.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
 	coll := &collection.Collection{ID: "movies", Type: collection.CollectionTypeMovies, Storage: storage}
 	report, err := Refresh(context.Background(), coll, client, RefreshOptions{
-		Languages: []string{"en"}, Formats: []string{"srt"}, MinimumConfidence: 0.5, Write: true,
+		Languages: []string{"en"}, Formats: []string{"srt"}, MinimumConfidence: 0.5, Write: true, Journal: repo,
 	})
 	if err != nil {
 		t.Fatalf("Refresh() error = %v", err)
@@ -99,6 +105,16 @@ func TestRefreshConfirmsUnknownSearchFormatFromDownloadedFilename(t *testing.T) 
 	action := report.Actions[0]
 	if action.State != "written" {
 		t.Fatalf("action state = %q, reason = %q", action.State, action.Reason)
+	}
+	if action.JobID == "" {
+		t.Fatal("subtitle report omitted the durable operation ID")
+	}
+	operation, err := repo.GetMediaOperation(context.Background(), "movies", action.Source, "subtitle_refresh:en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation == nil || operation.ID != action.JobID {
+		t.Fatalf("report job ID %q does not match persisted operation %#v", action.JobID, operation)
 	}
 	if filepath.Ext(action.Destination) != ".srt" {
 		t.Fatalf("destination = %q, want downloaded SRT extension", action.Destination)

@@ -46,6 +46,7 @@ type RefreshOptions struct {
 const AlgorithmVersion = 2
 
 type SubtitleAction struct {
+	JobID       string                   `json:"job_id,omitempty"`
 	Source      string                   `json:"source"`
 	Destination string                   `json:"destination,omitempty"`
 	Language    string                   `json:"language"`
@@ -263,6 +264,21 @@ func Refresh(ctx context.Context, coll *collection.Collection, client *OpenSubti
 				action.State = "written"
 			}
 			emit(action, video, opts, oldOperation)
+		}
+	}
+	if opts.Journal != nil {
+		for i := range report.Actions {
+			actionName := "subtitle_refresh:" + strings.ToLower(report.Actions[i].Language)
+			operation, err := opts.Journal.GetMediaOperation(ctx, coll.ID, report.Actions[i].Source, actionName)
+			if err != nil {
+				if journalErr == nil {
+					journalErr = err
+				}
+				continue
+			}
+			if operation != nil {
+				report.Actions[i].JobID = operation.ID
+			}
 		}
 	}
 	if journalErr != nil {

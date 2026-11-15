@@ -57,6 +57,7 @@ type Options struct {
 const AlgorithmVersion = 2
 
 type ItemReport struct {
+	JobID            string             `json:"job_id,omitempty"`
 	Source           string             `json:"source"`
 	Destination      string             `json:"destination,omitempty"`
 	ProviderID       string             `json:"provider_id,omitempty"`
@@ -307,6 +308,15 @@ func Run(ctx context.Context, coll *collection.Collection, p provider.Provider, 
 	if opts.Journal != nil {
 		if err := recordMetadataOperations(ctx, opts.Journal, coll.ID, report.Items, inventory, opts, worker, leaseKeeper); err != nil {
 			return report, err
+		}
+		for i := range report.Items {
+			operation, err := opts.Journal.GetMediaOperation(ctx, coll.ID, report.Items[i].Source, "metadata_refresh")
+			if err != nil {
+				return report, err
+			}
+			if operation != nil {
+				report.Items[i].JobID = operation.ID
+			}
 		}
 	}
 	return report, nil
