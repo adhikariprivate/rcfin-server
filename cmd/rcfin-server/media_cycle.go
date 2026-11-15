@@ -179,7 +179,9 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 		return updateLibraryStageState(ctx, db, library.ID, processingVersions, "metadata", "subtitles")
 	}
 
-	changedLibraryPaths := eligibleChangedVideoPaths(reconciliation.Changes, collection.InventoryScopeLibrary)
+	changedVideoPaths := eligibleChangedVideoPaths(reconciliation.Changes, collection.InventoryScopeLibrary)
+	changedMetadataLibraryPaths := appendUniquePaths(append([]string(nil), changedVideoPaths...), affectedMediaPathsBySidecarChanges(reconciliation.Changes, inventory, collection.InventoryScopeLibrary, "metadata", coll.Type)...)
+	changedSubtitleLibraryPaths := appendUniquePaths(append([]string(nil), changedVideoPaths...), affectedMediaPathsBySidecarChanges(reconciliation.Changes, inventory, collection.InventoryScopeLibrary, "subtitles", coll.Type)...)
 	metadataAlgorithmChanged := containsString(reconciliation.AlgorithmChanges, "metadata")
 	subtitleAlgorithmChanged := containsString(reconciliation.AlgorithmChanges, "subtitles")
 	metadataConfigurationChanged := containsString(reconciliation.ConfigurationChanges, "metadata")
@@ -196,7 +198,7 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 	if err != nil {
 		return fmt.Errorf("inspect pending subtitle work: %w", err)
 	}
-	metadataCandidates := stageWorkPaths(changedLibraryPaths, pendingMetadataPaths, inventory, collection.InventoryScopeLibrary, metadataAlgorithmChanged || metadataConfigurationChanged)
+	metadataCandidates := stageWorkPaths(changedMetadataLibraryPaths, pendingMetadataPaths, inventory, collection.InventoryScopeLibrary, metadataAlgorithmChanged || metadataConfigurationChanged)
 	metadataForced := metadataAlgorithmChanged || metadataConfigurationChanged
 	var tmdb *provider.TMDb
 	needsTMDb := organizationPolicy.Enabled || metadataEnabled && hasEligiblePaths(metadataCandidates, readyInboxPaths)
@@ -275,7 +277,10 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 			if err != nil {
 				return fmt.Errorf("refresh inventory after Inbox organization: %w", err)
 			}
-			changedLibraryPaths = appendUniquePaths(changedLibraryPaths, eligibleChangedVideoPaths(reconciliation.Changes, collection.InventoryScopeLibrary)...)
+			changedMetadataLibraryPaths = appendUniquePaths(changedMetadataLibraryPaths, eligibleChangedVideoPaths(reconciliation.Changes, collection.InventoryScopeLibrary)...)
+			changedMetadataLibraryPaths = appendUniquePaths(changedMetadataLibraryPaths, affectedMediaPathsBySidecarChanges(reconciliation.Changes, inventory, collection.InventoryScopeLibrary, "metadata", coll.Type)...)
+			changedSubtitleLibraryPaths = appendUniquePaths(changedSubtitleLibraryPaths, eligibleChangedVideoPaths(reconciliation.Changes, collection.InventoryScopeLibrary)...)
+			changedSubtitleLibraryPaths = appendUniquePaths(changedSubtitleLibraryPaths, affectedMediaPathsBySidecarChanges(reconciliation.Changes, inventory, collection.InventoryScopeLibrary, "subtitles", coll.Type)...)
 			metadataAlgorithmChanged = metadataAlgorithmChanged || containsString(reconciliation.AlgorithmChanges, "metadata")
 			subtitleAlgorithmChanged = subtitleAlgorithmChanged || containsString(reconciliation.AlgorithmChanges, "subtitles")
 			metadataConfigurationChanged = metadataConfigurationChanged || containsString(reconciliation.ConfigurationChanges, "metadata")
@@ -284,8 +289,8 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 		}
 	}
 
-	metadataLibraryPaths := stageWorkPaths(changedLibraryPaths, pendingMetadataPaths, inventory, collection.InventoryScopeLibrary, metadataAlgorithmChanged || metadataConfigurationChanged)
-	subtitleLibraryPaths := stageWorkPaths(changedLibraryPaths, pendingSubtitlePaths, inventory, collection.InventoryScopeLibrary, subtitleAlgorithmChanged || subtitleConfigurationChanged)
+	metadataLibraryPaths := stageWorkPaths(changedMetadataLibraryPaths, pendingMetadataPaths, inventory, collection.InventoryScopeLibrary, metadataAlgorithmChanged || metadataConfigurationChanged)
+	subtitleLibraryPaths := stageWorkPaths(changedSubtitleLibraryPaths, pendingSubtitlePaths, inventory, collection.InventoryScopeLibrary, subtitleAlgorithmChanged || subtitleConfigurationChanged)
 	// A confirmed Inbox promotion is a path move, not new media. Carry the
 	// original eligible work over to its final path without repeating detection.
 	for _, pathBefore := range readyInboxPaths {
@@ -471,6 +476,54 @@ func eligibleChangedVideoPaths(changes []collection.InventoryChange, scope strin
 		}
 		if change.Entry.Role == collection.InventoryVideo && !change.Entry.IsDir && change.Entry.Scope == scope {
 			paths = appendUnique(paths, change.Path)
+		}
+	}
+	return paths
+}
+
+// affectedMediaPathsBySidecarChanges maps changed or removed sidecars back to
+// their media items. Sidecars are separate inventory objects, but metadata and
+// subtitle decisions can depend on them (for example, an edited NFO provider
+// ID or a deleted local subtitle).
+func affectedMediaPathsBySidecarChanges(changes []collection.InventoryChange, inventory []collection.InventoryEntry, scope, stage string, kind collection.CollectionType) []string {
+	var paths []string
+	for _, change := range changes {
+		if change.Kind != collection.InventoryNew && change.Kind != collection.InventoryChanged && change.Kind != collection.InventoryMissing {
+			continue
+		}
+		sidecarPath := change.Path
+		role := change.Entry.Role
+		sidecarScope := change.Entry.Scope
+		if change.PreviousEntry != nil && (change.Kind == collection.InventoryMissing || sidecarPath == "") {
+			sidecarPath = change.PreviousEntry.Path
+			role = collection.InventoryRole(change.PreviousEntry.Role)
+			sidecarScope = change.PreviousEntry.Scope
+		}
+		if sidecarScope != scope || sidecarPath == "" {
+			continue
+		}
+		if stage == "metadata" && role != collection.InventoryNFO && role != collection.InventoryArtwork || stage == "subtitles" && role != collection.InventorySubtitle {
+			continue
+		}
+		for _, video := range inventory {
+			if video.Scope != scope || video.Role != collection.InventoryVideo || video.IsDir {
+				continue
+			}
+			affected := false
+			if stage == "metadata" {
+				if kind == collection.CollectionTypeShows {
+					affected = collection.InventoryShowRoot(video.Path) == collection.InventoryShowRoot(sidecarPath)
+				} else {
+					affected = path.Dir(video.Path) == path.Dir(sidecarPath)
+				}
+			} else {
+				videoStem := strings.TrimSuffix(path.Base(video.Path), path.Ext(video.Path))
+				sidecarStem := strings.TrimSuffix(path.Base(sidecarPath), path.Ext(sidecarPath))
+				affected = path.Dir(video.Path) == path.Dir(sidecarPath) && (strings.EqualFold(videoStem, sidecarStem) || strings.HasPrefix(strings.ToLower(sidecarStem), strings.ToLower(videoStem)+"."))
+			}
+			if affected {
+				paths = appendUnique(paths, video.Path)
+			}
 		}
 	}
 	return paths

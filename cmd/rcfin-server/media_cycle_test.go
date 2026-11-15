@@ -189,6 +189,27 @@ func TestWrittenSidecarIsMergedIntoCurrentInventory(t *testing.T) {
 	}
 }
 
+func TestSidecarChangesSelectOnlyAffectedMediaStage(t *testing.T) {
+	showInventory := []collection.InventoryEntry{{Path: "Series/Season 01/S01E01.mkv", Scope: collection.InventoryScopeLibrary, Role: collection.InventoryVideo}}
+	nfoChange := []collection.InventoryChange{{Kind: collection.InventoryChanged, Path: "Series/tvshow.nfo", Entry: collection.InventoryEntry{Path: "Series/tvshow.nfo", Scope: collection.InventoryScopeLibrary, Role: collection.InventoryNFO}}}
+	if got := affectedMediaPathsBySidecarChanges(nfoChange, showInventory, collection.InventoryScopeLibrary, "metadata", collection.CollectionTypeShows); len(got) != 1 || got[0] != showInventory[0].Path {
+		t.Fatalf("show NFO change selected media paths %v", got)
+	}
+	if got := affectedMediaPathsBySidecarChanges(nfoChange, showInventory, collection.InventoryScopeLibrary, "subtitles", collection.CollectionTypeShows); len(got) != 0 {
+		t.Fatalf("show NFO change selected subtitle work %v", got)
+	}
+
+	movieInventory := []collection.InventoryEntry{{Path: "Film/Movie.mkv", Scope: collection.InventoryScopeLibrary, Role: collection.InventoryVideo}}
+	removedSubtitle := model.LibraryInventoryEntry{Path: "Film/Movie.en.srt", Scope: collection.InventoryScopeLibrary, Role: string(collection.InventorySubtitle)}
+	subtitleChange := []collection.InventoryChange{{Kind: collection.InventoryMissing, Path: removedSubtitle.Path, PreviousEntry: &removedSubtitle}}
+	if got := affectedMediaPathsBySidecarChanges(subtitleChange, movieInventory, collection.InventoryScopeLibrary, "subtitles", collection.CollectionTypeMovies); len(got) != 1 || got[0] != movieInventory[0].Path {
+		t.Fatalf("removed subtitle selected media paths %v", got)
+	}
+	if got := affectedMediaPathsBySidecarChanges(subtitleChange, movieInventory, collection.InventoryScopeLibrary, "metadata", collection.CollectionTypeMovies); len(got) != 0 {
+		t.Fatalf("removed subtitle selected metadata work %v", got)
+	}
+}
+
 func TestAdminScanPreservesUnprocessedStageConfigurationChanges(t *testing.T) {
 	repo, err := sqlite.New(&sqlite.ConfigFile{Filename: filepath.Join(t.TempDir(), "media.db")})
 	if err != nil {
