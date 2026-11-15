@@ -260,15 +260,16 @@ same-library move into Inbox, where ordinary transfer-readiness checks apply.
 `rcfin library refresh all LIBRARY [--item PATH]` runs metadata first and
 subtitles second from the same inventory. Its replacement flags are separate:
 `--replace-metadata`, `--replace-artwork`, and `--replace-subtitles`. `rcfin
-library status LIBRARY [--item PATH]` reports matching inventory classification
-and media-operation state.
+library status LIBRARY [--item PATH|--job ID]` reports inventory
+classification and media-operation state, or looks up one durable operation ID.
 Use `rcfin library organize plan LIBRARY [--item PATH] [--existing]` to review
 the proposed paths. After reviewing the report, `rcfin library organize apply
 LIBRARY --yes [--item PATH] [--existing]` executes the configured operation;
 apply requires the relevant organization feature enabled and its `dry_run`
 setting disabled. Existing-path normalization additionally requires
-`media.normalize_existing.enabled`. `rcfin library retry LIBRARY ITEM_KEY
-ACTION` retries a failed journal operation. The running server recovers queued
+`media.normalize_existing.enabled`. `rcfin library retry LIBRARY --job ID`
+retries a failed journal operation by ID; `rcfin library retry LIBRARY
+ITEM_KEY ACTION` remains available. The running server recovers queued
 operations during its next library cycle. When a unique move cannot be inferred,
 review the source and destination with status, then explicitly accept a
 fingerprint-matching video file or a directory whose complete descendant tree

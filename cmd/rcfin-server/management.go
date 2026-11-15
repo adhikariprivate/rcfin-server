@@ -95,12 +95,12 @@ func runManagementCommand(configPath string, args []string) error {
 			return runLibraryOrganizeCommand(ctx, repo, config, args[2:])
 		}
 		if len(args) >= 2 && args[1] == "retry" {
-			return runMediaCommand(ctx, repo, config.Collections, append([]string{"retry"}, args[2:]...))
+			return runLibraryRetryCommand(ctx, repo, config.Collections, args[2:])
 		}
 		if len(args) >= 2 && args[1] == "item" {
 			return runLibraryItemCommand(ctx, repo, config, args[2:])
 		}
-		return errors.New("usage: rcfin library <list|scan LIBRARY_ID [--full]|status LIBRARY_ID|refresh metadata|subtitles LIBRARY_ID|retry LIBRARY_ID ITEM_KEY ACTION|inbox stage LIBRARY_ID ITEM_PATH|organize plan|apply LIBRARY_ID|item adopt-move LIBRARY_ID --from PATH --to PATH>")
+		return errors.New("usage: rcfin library <list|scan LIBRARY_ID [--full]|status LIBRARY_ID [--item PATH|--job ID]|refresh metadata|subtitles LIBRARY_ID|retry LIBRARY_ID [--job ID]|inbox stage LIBRARY_ID ITEM_PATH|organize plan|apply LIBRARY_ID|item adopt-move LIBRARY_ID --from PATH --to PATH>")
 	case "user":
 		return runUserCommand(ctx, repo, config.Collections, args[1:])
 	case "media":
@@ -183,6 +183,38 @@ func runLibraryItemCommand(ctx context.Context, repo database.Repository, config
 		To           string `json:"to"`
 		State        string `json:"state"`
 	}{libraryID, snapshot.Generation, *fromPath, *toPath, "adopted"})
+}
+
+func runLibraryRetryCommand(ctx context.Context, repo database.Repository, libraries []collectionConfig, args []string) error {
+	if len(args) == 3 && args[1] != "--job" {
+		return runMediaCommand(ctx, repo, libraries, append([]string{"retry"}, args...))
+	}
+	if len(args) < 1 {
+		return errors.New("usage: rcfin library retry LIBRARY_ID --job JOB_ID")
+	}
+	libraryID := args[0]
+	if !configuredLibrary(libraries, libraryID) {
+		return fmt.Errorf("unknown library ID %q", libraryID)
+	}
+	flags := pflag.NewFlagSet("library retry", pflag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	jobID := flags.String("job", "", "Durable media operation ID")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || strings.TrimSpace(*jobID) == "" {
+		return errors.New("usage: rcfin library retry LIBRARY_ID --job JOB_ID")
+	}
+	operations, err := database.ListAllMediaOperations(ctx, repo, libraryID)
+	if err != nil {
+		return fmt.Errorf("list library operations: %w", err)
+	}
+	for _, operation := range operations {
+		if operation.ID == *jobID {
+			return runMediaCommand(ctx, repo, libraries, []string{"retry", libraryID, operation.ItemKey, operation.Action})
+		}
+	}
+	return fmt.Errorf("job %q was not found in library %q", *jobID, libraryID)
 }
 
 func runLibraryOrganizeCommand(ctx context.Context, repo database.Repository, config configFile, args []string) error {
@@ -731,17 +763,21 @@ func runLibraryScanCommand(ctx context.Context, repo database.Repository, config
 
 func runLibraryStatusCommand(ctx context.Context, repo database.Repository, libraries []collectionConfig, args []string) error {
 	if len(args) < 1 {
-		return errors.New("usage: rcfin library status LIBRARY_ID [--item PATH]")
+		return errors.New("usage: rcfin library status LIBRARY_ID [--item PATH|--job ID]")
 	}
 	libraryID := args[0]
 	flags := pflag.NewFlagSet("library status", pflag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	itemPath := flags.String("item", "", "Filter inventory and operation state to one relative path")
+	jobID := flags.String("job", "", "Filter operation state to one durable job ID")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return errors.New("unexpected arguments after library status flags")
+	}
+	if *itemPath != "" && *jobID != "" {
+		return errors.New("--item and --job cannot be used together")
 	}
 	if !configuredLibrary(libraries, libraryID) {
 		return fmt.Errorf("unknown library ID %q", libraryID)
@@ -778,6 +814,19 @@ func runLibraryStatusCommand(ctx context.Context, repo database.Repository, libr
 			}
 		}
 		operations = filtered
+	}
+	if *jobID != "" {
+		filtered := make([]model.MediaOperation, 0, 1)
+		for _, operation := range operations {
+			if operation.ID == *jobID {
+				filtered = append(filtered, operation)
+			}
+		}
+		if len(filtered) == 0 {
+			return fmt.Errorf("job %q was not found in library %q", *jobID, libraryID)
+		}
+		operations = filtered
+		snapshot.Entries = nil
 	}
 	return json.NewEncoder(os.Stdout).Encode(struct {
 		Inventory  *model.LibraryInventorySnapshot `json:"inventory"`

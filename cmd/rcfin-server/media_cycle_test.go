@@ -105,3 +105,26 @@ func TestDeferredProviderCredentialsKeepNewMediaQueued(t *testing.T) {
 		}
 	}
 }
+
+func TestLibraryRetryFindsAndRequeuesOperationByJobID(t *testing.T) {
+	repo, err := sqlite.New(&sqlite.ConfigFile{Filename: filepath.Join(t.TempDir(), "media.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	now := time.Now().UTC()
+	operation := &model.MediaOperation{ID: "job-123", CollectionID: "movies", ItemKey: "Film/Movie.mkv", SourcePath: "Film/Movie.mkv", Action: "metadata_refresh", Status: "failed_retryable", Error: "temporary provider failure", CreatedAt: now, UpdatedAt: now, NextAttempt: now.Add(time.Hour), LeaseUntil: now}
+	if err := repo.UpsertMediaOperation(context.Background(), operation); err != nil {
+		t.Fatal(err)
+	}
+	if err := runLibraryRetryCommand(context.Background(), repo, []collectionConfig{{ID: "movies"}}, []string{"movies", "--job", "job-123"}); err != nil {
+		t.Fatal(err)
+	}
+	retried, err := repo.GetMediaOperation(context.Background(), "movies", "Film/Movie.mkv", "metadata_refresh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retried == nil || retried.Status != "planned" || retried.Error != "" {
+		t.Fatalf("job retry was not queued: %#v", retried)
+	}
+}
