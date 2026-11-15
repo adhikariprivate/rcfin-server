@@ -190,11 +190,11 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 	if err != nil {
 		log.Printf("Inbox readiness for %q deferred: %v", library.ID, err)
 	}
-	pendingMetadataPaths, err := pendingMediaPaths(ctx, db, library.ID, inventory, collection.InventoryScopeLibrary, "metadata", coll.Type)
+	pendingMetadataPaths, err := pendingMediaPaths(ctx, db, library.ID, inventory, collection.InventoryScopeLibrary, "metadata", coll.Type, false)
 	if err != nil {
 		return fmt.Errorf("inspect pending metadata work: %w", err)
 	}
-	pendingSubtitlePaths, err := pendingMediaPaths(ctx, db, library.ID, inventory, collection.InventoryScopeLibrary, "subtitles", coll.Type)
+	pendingSubtitlePaths, err := pendingMediaPaths(ctx, db, library.ID, inventory, collection.InventoryScopeLibrary, "subtitles", coll.Type, metadataEnabled)
 	if err != nil {
 		return fmt.Errorf("inspect pending subtitle work: %w", err)
 	}
@@ -626,7 +626,7 @@ func mergeWrittenSubtitleInventory(coll *collection.Collection, inventory []coll
 	return inventory
 }
 
-func pendingMediaPaths(ctx context.Context, db database.Repository, libraryID string, inventory []collection.InventoryEntry, scope, stage string, kind collection.CollectionType) ([]string, error) {
+func pendingMediaPaths(ctx context.Context, db database.Repository, libraryID string, inventory []collection.InventoryEntry, scope, stage string, kind collection.CollectionType, metadataRequired bool) ([]string, error) {
 	operations, err := database.ListAllMediaOperations(ctx, db, libraryID)
 	if err != nil {
 		return nil, err
@@ -644,7 +644,7 @@ func pendingMediaPaths(ctx context.Context, db database.Repository, libraryID st
 			continue
 		}
 		if stage == "subtitles" && operation.Status == "waiting_metadata" {
-			if metadataOperationReadyForItem(operations, operation.ItemKey, kind) {
+			if !metadataRequired || metadataOperationReadyForItem(operations, operation.ItemKey, kind) {
 				if _, exists := byPath[operation.ItemKey]; exists {
 					paths = appendUnique(paths, operation.ItemKey)
 				}

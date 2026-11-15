@@ -142,11 +142,11 @@ func TestPendingMediaPathsAreStageScoped(t *testing.T) {
 		{Path: "Film/one.mkv", Scope: collection.InventoryScopeLibrary, Role: collection.InventoryVideo},
 		{Path: "Film/two.mkv", Scope: collection.InventoryScopeLibrary, Role: collection.InventoryVideo},
 	}
-	metadataPaths, err := pendingMediaPaths(context.Background(), repo, "movies", inventory, collection.InventoryScopeLibrary, "metadata", collection.CollectionTypeMovies)
+	metadataPaths, err := pendingMediaPaths(context.Background(), repo, "movies", inventory, collection.InventoryScopeLibrary, "metadata", collection.CollectionTypeMovies, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	subtitlePaths, err := pendingMediaPaths(context.Background(), repo, "movies", inventory, collection.InventoryScopeLibrary, "subtitles", collection.CollectionTypeMovies)
+	subtitlePaths, err := pendingMediaPaths(context.Background(), repo, "movies", inventory, collection.InventoryScopeLibrary, "subtitles", collection.CollectionTypeMovies, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,12 +228,20 @@ func TestSubtitleWorkWaitsForMetadataOperation(t *testing.T) {
 		}
 	}
 	inventory := []collection.InventoryEntry{{Path: videoPath, Scope: collection.InventoryScopeLibrary, Role: collection.InventoryVideo}}
-	paths, err := pendingMediaPaths(ctx, repo, "movies", inventory, collection.InventoryScopeLibrary, "subtitles", collection.CollectionTypeMovies)
+	paths, err := pendingMediaPaths(ctx, repo, "movies", inventory, collection.InventoryScopeLibrary, "subtitles", collection.CollectionTypeMovies, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(paths) != 0 {
 		t.Fatalf("subtitle operation became eligible before metadata completed: %v", paths)
+	}
+	paths, err = pendingMediaPaths(ctx, repo, "movies", inventory, collection.InventoryScopeLibrary, "subtitles", collection.CollectionTypeMovies, false)
+	if err != nil || len(paths) != 1 || paths[0] != videoPath {
+		t.Fatalf("subtitle-only policy did not release metadata wait: paths=%v err=%v", paths, err)
+	}
+	paths, err = pendingMediaPaths(ctx, repo, "movies", inventory, collection.InventoryScopeLibrary, "subtitles", collection.CollectionTypeMovies, true)
+	if err != nil || len(paths) != 0 {
+		t.Fatalf("metadata-enabled policy did not keep subtitle work waiting: paths=%v err=%v", paths, err)
 	}
 	blocked, err := unresolvedMetadataPaths(ctx, repo, "movies", []string{videoPath}, collection.CollectionTypeMovies)
 	if err != nil || len(blocked) != 1 || blocked[0] != videoPath {
@@ -248,7 +256,7 @@ func TestSubtitleWorkWaitsForMetadataOperation(t *testing.T) {
 	if err := repo.UpsertMediaOperation(ctx, metadata); err != nil {
 		t.Fatal(err)
 	}
-	paths, err = pendingMediaPaths(ctx, repo, "movies", inventory, collection.InventoryScopeLibrary, "subtitles", collection.CollectionTypeMovies)
+	paths, err = pendingMediaPaths(ctx, repo, "movies", inventory, collection.InventoryScopeLibrary, "subtitles", collection.CollectionTypeMovies, true)
 	if err != nil {
 		t.Fatal(err)
 	}
