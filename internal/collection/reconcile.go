@@ -258,16 +258,21 @@ func persistedInventoryEntry(entry InventoryEntry) model.LibraryInventoryEntry {
 }
 
 func populateTreeFingerprints(entries []model.LibraryInventoryEntry) {
+	ordered := append([]model.LibraryInventoryEntry(nil), entries...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Path < ordered[j].Path })
+	paths := make([]string, len(ordered))
+	for i := range ordered {
+		paths[i] = ordered[i].Path
+	}
 	for i := range entries {
 		if !entries[i].IsDir {
 			continue
 		}
 		var descendants []string
 		prefix := entries[i].Path + "/"
-		for _, child := range entries {
-			if !strings.HasPrefix(child.Path, prefix) {
-				continue
-			}
+		start := sort.SearchStrings(paths, prefix)
+		for j := start; j < len(ordered) && strings.HasPrefix(ordered[j].Path, prefix); j++ {
+			child := ordered[j]
 			relative := strings.TrimPrefix(child.Path, prefix)
 			descendants = append(descendants, fmt.Sprintf("%s\x00%s\x00%s", relative, child.Role, child.Fingerprint))
 		}
