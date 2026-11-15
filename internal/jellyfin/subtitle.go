@@ -60,7 +60,17 @@ func (j *Jellyfin) subtitleStreamHandler(w http.ResponseWriter, r *http.Request)
 		http.NotFound(w, r)
 		return
 	}
-	if vars["mediasourceid"] != item.ID() {
+	mediaSourceID := vars["mediasourceid"]
+	validMediaSource := mediaSourceID == item.ID()
+	if versioned, ok := item.(collection.VersionedItem); ok {
+		for _, version := range versioned.MediaVersions() {
+			if version.ID == mediaSourceID {
+				validMediaSource = true
+				break
+			}
+		}
+	}
+	if !validMediaSource {
 		http.NotFound(w, r)
 		return
 	}
@@ -68,12 +78,13 @@ func (j *Jellyfin) subtitleStreamHandler(w http.ResponseWriter, r *http.Request)
 		http.NotFound(w, r)
 		return
 	}
+	subtitles := collection.SidecarSubtitlesForVersion(item, mediaSourceID)
 	index, err := strconv.Atoi(vars["index"])
-	if err != nil || index < 2 || index-2 >= len(collection.SidecarSubtitles(item)) {
+	if err != nil || index < 2 || index-2 >= len(subtitles) {
 		http.NotFound(w, r)
 		return
 	}
-	sub := collection.SidecarSubtitles(item)[index-2]
+	sub := subtitles[index-2]
 	requestedFormat := strings.ToLower(vars["format"])
 	ext := strings.ToLower(path.Ext(sub.Path))
 	if requestedFormat != "srt" && requestedFormat != "vtt" {

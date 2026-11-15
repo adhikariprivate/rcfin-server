@@ -1160,12 +1160,35 @@ func (j *Jellyfin) videoStreamHandler(w http.ResponseWriter, r *http.Request) {
 	itemID := vars["itemid"]
 
 	c, i := j.collections.GetItemByID(trimPrefix(itemID))
-	if i == nil || c == nil || i.FileName() == "" || !j.userCanAccessCollection(r.Context(), reqCtx.User.ID, c.ID) {
+	if i == nil || c == nil || !j.userCanAccessCollection(r.Context(), reqCtx.User.ID, c.ID) {
 		apierror(w, "Item not found", http.StatusNotFound)
 		return
 	}
-	w.Header().Set("content-type", mimeTypeByExtension(i.FileName()))
-	j.serveFile(w, r, c.Storage, path.Join(i.Path(), i.FileName()))
+	filename := i.FileName()
+	mediaSourceID := strings.TrimSpace(r.URL.Query().Get("mediaSourceId"))
+	if mediaSourceID != "" && mediaSourceID != i.ID() {
+		versioned, ok := i.(collection.VersionedItem)
+		found := false
+		if ok {
+			for _, version := range versioned.MediaVersions() {
+				if version.ID == mediaSourceID {
+					filename = version.FileName
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			apierror(w, "Media source not found", http.StatusNotFound)
+			return
+		}
+	}
+	if filename == "" {
+		apierror(w, "Item not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("content-type", mimeTypeByExtension(filename))
+	j.serveFile(w, r, c.Storage, path.Join(i.Path(), filename))
 }
 
 func (j *Jellyfin) serveFile(w http.ResponseWriter, r *http.Request, storage *rclonestore.Library, filename string) {

@@ -51,6 +51,65 @@ collections:
     # Must be a configured Rclone remote followed by a colon and remote path.
     # The remote name must match a section in rclone.config above.
     remote: files:HTPC/Movies
+    media:
+      # Explicit relative intake path. It is excluded from the playable scan.
+      inbox_path: .Inbox
+      # Shared concurrency limit across metadata, subtitles, and organization.
+      # Zero or omission defaults to one; accepted range is 0..32.
+      max_parallel_jobs: 1
+      # Existing-path migration is independent from Inbox organization and is
+      # disabled by default. Review the dry-run report before setting dry_run: false.
+      normalize_existing:
+        enabled: false
+        dry_run: true
+      organize:
+        enabled: false
+        dry_run: true
+        # Opaque DVD/Blu-ray movie folders may be moved only when explicitly enabled.
+        disc_folders: false
+        preserve_grouping_directories: true
+        conflict_policy: skip
+        allow_cross_backend_copy_delete: false
+        include_provider_id: true
+        minimum_confidence: 0.88
+        folder_format: "{title} ({year}) [tmdbid-{tmdb_id}]"
+        file_format: "{folder} [{quality}-{resolution}]{version} [{edition}] [{release_group}].{ext}"
+        episode_fallback_languages: [en]
+        allowed_extensions: [mkv, mp4, m4v, m4u, mov, avi, divx, webm, mpg, mpeg, mpe, mpeg2, m1v, m2v, ts, mts, m2ts, vob, wmv, flv, ogv, ogm, 3gp, 3g2]
+      metadata:
+        enabled: false
+        provider: tmdb
+        api_key_env: RCFIN_TMDB_API_KEY
+        language: en-US
+        fallback_languages: [en]
+        artwork_max_bytes: 12582912
+        artwork_max_width: 5000
+        artwork_max_height: 5000
+        artwork_formats: [jpeg, png]
+        artwork_poster_size: w500
+        artwork_backdrop_size: w780
+        request_timeout: 10s
+        retry_limit: 3
+        fetch_artwork: true
+        fetch_nfo: true
+        overwrite_existing: false
+        overwrite_artwork: false
+        refresh_existing_after: 24h
+      subtitles:
+        enabled: false
+        provider: opensubtitles
+        api_key_env: RCFIN_OPENSUBTITLES_API_KEY
+        username_env: RCFIN_OPENSUBTITLES_USERNAME
+        password_env: RCFIN_OPENSUBTITLES_PASSWORD
+        languages: [en]
+        hearing_impaired: false
+        forced: false
+        formats: [srt]
+        overwrite_existing: false
+        minimum_confidence: 0.84
+        request_timeout: 15s
+        retry_limit: 3
+        max_download_bytes: 20971520
     vfs:
       dir_cache_time: 30m
       poll_interval: 0s
@@ -66,6 +125,60 @@ collections:
     name: TV Shows
     type: shows
     remote: files:HTPC/TV
+    media:
+      inbox_path: .Inbox
+      max_parallel_jobs: 1
+      normalize_existing:
+        enabled: false
+        dry_run: true
+      organize:
+        enabled: false
+        dry_run: true
+        disc_folders: false
+        preserve_grouping_directories: true
+        conflict_policy: skip
+        allow_cross_backend_copy_delete: false
+        include_provider_id: true
+        minimum_confidence: 0.88
+        series_format: "{title} ({year}) [tmdbid-{tmdb_id}]"
+        season_format: "Season {season}"
+        episode_format: "{series} - {episode} - {episode_title} [{quality}-{resolution}]{version} [{edition}] [{release_group}].{ext}"
+        episode_fallback_languages: [en]
+        allowed_extensions: [mkv, mp4, m4v, m4u, mov, avi, divx, webm, mpg, mpeg, mpe, mpeg2, m1v, m2v, ts, mts, m2ts, vob, wmv, flv, ogv, ogm, 3gp, 3g2]
+      metadata:
+        enabled: false
+        provider: tmdb
+        api_key_env: RCFIN_TMDB_API_KEY
+        language: en-US
+        fallback_languages: [en]
+        artwork_max_bytes: 12582912
+        artwork_max_width: 5000
+        artwork_max_height: 5000
+        artwork_formats: [jpeg, png]
+        artwork_poster_size: w500
+        artwork_backdrop_size: w780
+        request_timeout: 10s
+        retry_limit: 3
+        fetch_artwork: true
+        fetch_nfo: true
+        overwrite_existing: false
+        overwrite_artwork: false
+        refresh_existing_after: 24h
+      subtitles:
+        enabled: false
+        provider: opensubtitles
+        api_key_env: RCFIN_OPENSUBTITLES_API_KEY
+        username_env: RCFIN_OPENSUBTITLES_USERNAME
+        password_env: RCFIN_OPENSUBTITLES_PASSWORD
+        languages: [en]
+        hearing_impaired: false
+        forced: false
+        formats: [srt]
+        overwrite_existing: false
+        minimum_confidence: 0.84
+        request_timeout: 15s
+        retry_limit: 3
+        max_download_bytes: 20971520
     vfs:
       dir_cache_time: 30m
       poll_interval: 0s

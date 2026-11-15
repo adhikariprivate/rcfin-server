@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,9 +14,15 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/term"
 
+	"github.com/adhikariprivate/rcfin-server/internal/collection"
 	"github.com/adhikariprivate/rcfin-server/internal/database"
 	"github.com/adhikariprivate/rcfin-server/internal/database/model"
 	"github.com/adhikariprivate/rcfin-server/internal/idhash"
+	"github.com/adhikariprivate/rcfin-server/internal/metadata/provider"
+	metadatarefresh "github.com/adhikariprivate/rcfin-server/internal/metadata/refresh"
+	"github.com/adhikariprivate/rcfin-server/internal/organization"
+	"github.com/adhikariprivate/rcfin-server/internal/rclonestore"
+	"github.com/adhikariprivate/rcfin-server/internal/subtitles"
 )
 
 func managementCommand(args []string) (commandArgs []string, configPath string, ok bool) {
@@ -36,7 +43,7 @@ func managementCommand(args []string) (commandArgs []string, configPath string, 
 		}
 		remaining = append(remaining, args[i])
 	}
-	if len(remaining) == 0 || (remaining[0] != "user" && remaining[0] != "library") {
+	if len(remaining) == 0 || (remaining[0] != "user" && remaining[0] != "library" && remaining[0] != "media") {
 		return nil, configPath, false
 	}
 	return remaining, configPath, true
@@ -49,6 +56,12 @@ func runManagementCommand(configPath string, args []string) error {
 	}
 	if err := validateCollections(config.Collections); err != nil {
 		return fmt.Errorf("invalid collections: %w", err)
+	}
+	if args[0] == "media" && len(args) > 1 && args[1] == "inventory" {
+		return runMediaInventoryCommand(context.Background(), config, args[2:])
+	}
+	if args[0] == "media" && len(args) > 1 && args[1] == "plan" {
+		return runMediaPlanCommand(context.Background(), config, args[2:])
 	}
 	repo, err := openConfiguredDatabase(config)
 	if err != nil {
@@ -68,9 +81,326 @@ func runManagementCommand(configPath string, args []string) error {
 		return nil
 	case "user":
 		return runUserCommand(ctx, repo, config.Collections, args[1:])
+	case "media":
+		return runMediaCommand(ctx, repo, config.Collections, args[1:])
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func runMediaCommand(ctx context.Context, repo database.Repository, libraries []collectionConfig, args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: rcfin media <inventory|plan|status|refresh|retry> [arguments]")
+	}
+	switch args[0] {
+	case "status":
+		if len(args) > 2 {
+			return errors.New("usage: rcfin media status [LIBRARY_ID]")
+		}
+		selected := libraries
+		if len(args) == 2 {
+			selected = nil
+			for _, library := range libraries {
+				if library.ID == args[1] {
+					selected = append(selected, library)
+				}
+			}
+			if len(selected) == 0 {
+				return fmt.Errorf("unknown library ID %q", args[1])
+			}
+		}
+		for _, library := range selected {
+			operations, err := database.ListAllMediaOperations(ctx, repo, library.ID)
+			if err != nil {
+				return fmt.Errorf("list media operations for %q: %w", library.ID, err)
+			}
+			for _, op := range operations {
+				fmt.Printf("%-16s %-24s %-24s %-20s attempts=%d next=%s source=%s destination=%s error=%s\n", library.ID, op.ItemKey, op.Action, op.Status, op.Attempts, op.NextAttempt.UTC().Format(time.RFC3339), op.SourcePath, op.DestinationPath, op.Error)
+			}
+		}
+		return nil
+	case "retry":
+		if len(args) != 4 {
+			return errors.New("usage: rcfin media retry LIBRARY_ID ITEM_KEY ACTION")
+		}
+		libraryID, itemKey, action := args[1], args[2], args[3]
+		if !configuredLibrary(libraries, libraryID) {
+			return fmt.Errorf("unknown library ID %q", libraryID)
+		}
+		op, err := repo.GetMediaOperation(ctx, libraryID, itemKey, action)
+		if err != nil {
+			return fmt.Errorf("look up media operation: %w", err)
+		}
+		if op == nil {
+			return fmt.Errorf("media operation %q for %q not found", action, itemKey)
+		}
+		if op.Status == "needs_review" {
+			return errors.New("operation needs review; resolve its identity or conflict before retrying")
+		}
+		if op.Status != "failed_retryable" && op.Status != "failed_terminal" && op.Status != "failed" && op.Status != "retryable" {
+			return fmt.Errorf("operation status %q is not retryable", op.Status)
+		}
+		op.Status = "planned"
+		op.NextAttempt = time.Now().UTC()
+		op.LeaseOwner = ""
+		op.LeaseUntil = time.Now().UTC()
+		op.Error = ""
+		op.UpdatedAt = time.Now().UTC()
+		if err := repo.UpsertMediaOperation(ctx, op); err != nil {
+			return fmt.Errorf("queue media operation retry: %w", err)
+		}
+		fmt.Printf("Queued retry for %s %s %s; the running RCFin server will pick it up on its next media cycle.\n", libraryID, itemKey, action)
+		return nil
+	case "refresh":
+		if len(args) < 2 || len(args) > 3 {
+			return errors.New("usage: rcfin media refresh LIBRARY_ID [ITEM_KEY]")
+		}
+		libraryID := args[1]
+		if !configuredLibrary(libraries, libraryID) {
+			return fmt.Errorf("unknown library ID %q", libraryID)
+		}
+		operations, err := database.ListAllMediaOperations(ctx, repo, libraryID)
+		if err != nil {
+			return fmt.Errorf("list media operations for %q: %w", libraryID, err)
+		}
+		queued := 0
+		for _, op := range operations {
+			if len(args) == 3 && op.ItemKey != args[2] {
+				continue
+			}
+			refreshable := op.Action == "metadata_refresh" || strings.HasPrefix(op.Action, "subtitle_refresh:")
+			if !refreshable || op.Status != "complete" {
+				continue
+			}
+			op.Status = "planned"
+			op.NextAttempt = time.Now().UTC()
+			op.LeaseOwner = ""
+			op.LeaseUntil = time.Now().UTC()
+			op.Error = ""
+			op.UpdatedAt = time.Now().UTC()
+			if err := repo.UpsertMediaOperation(ctx, &op); err != nil {
+				return fmt.Errorf("queue refresh for %q %s: %w", op.ItemKey, op.Action, err)
+			}
+			queued++
+		}
+		if queued == 0 {
+			return errors.New("no completed metadata or subtitle refresh operations matched; use the server's next scan to discover new items")
+		}
+		fmt.Printf("Queued %d metadata/subtitle refresh operation(s) for %s; enabled workers will process them on their next media cycle.\n", queued, libraryID)
+		return nil
+	default:
+		return fmt.Errorf("unknown media command %q (expected status, refresh, or retry)", args[0])
+	}
+}
+
+func runMediaPlanCommand(ctx context.Context, config configFile, args []string) error {
+	if len(args) < 2 || args[0] != "metadata" && args[0] != "subtitles" && args[0] != "organization" {
+		return errors.New("usage: rcfin media plan <metadata|subtitles> LIBRARY_ID | rcfin media plan organization LIBRARY_ID [--existing]")
+	}
+	existingOnly := false
+	if args[0] == "organization" {
+		if len(args) > 3 || len(args) == 3 && args[2] != "--existing" {
+			return errors.New("usage: rcfin media plan organization LIBRARY_ID [--existing]")
+		}
+		existingOnly = len(args) == 3
+	} else if len(args) != 2 {
+		return errors.New("usage: rcfin media plan <metadata|subtitles> LIBRARY_ID")
+	}
+	var selected *collectionConfig
+	for i := range config.Collections {
+		if config.Collections[i].ID == args[1] {
+			selected = &config.Collections[i]
+			break
+		}
+	}
+	if selected == nil {
+		return fmt.Errorf("unknown library ID %q", args[1])
+	}
+	if err := rclonestore.Configure(config.Rclone.Config, config.Rclone.CacheDir); err != nil {
+		return fmt.Errorf("configure Rclone: %w", err)
+	}
+	storage, err := rclonestore.New(ctx, selected.Remote, selected.VFS)
+	if err != nil {
+		return fmt.Errorf("open library %q: %w", selected.ID, err)
+	}
+	defer storage.Close()
+	inbox := selected.Media.InboxPath
+	if inbox == "" {
+		inbox = ".Inbox"
+	}
+	coll := &collection.Collection{ID: selected.ID, Type: collection.CollectionType(selected.Type), Storage: storage, InboxPath: inbox}
+	var report any
+	if args[0] == "organization" {
+		repo, dbErr := openConfiguredDatabase(config)
+		if dbErr != nil {
+			return fmt.Errorf("open database: %w", dbErr)
+		}
+		defer repo.Close()
+		metadataPolicy := selected.Media.Metadata
+		providerName := strings.ToLower(strings.TrimSpace(metadataPolicy.Provider))
+		if providerName == "" {
+			providerName = "tmdb"
+		}
+		if providerName != "tmdb" {
+			return fmt.Errorf("unsupported organization metadata provider %q", providerName)
+		}
+		keyEnv := strings.TrimSpace(metadataPolicy.APIKeyEnv)
+		if keyEnv == "" {
+			keyEnv = "RCFIN_TMDB_API_KEY"
+		}
+		client, clientErr := provider.NewTMDb(os.Getenv(keyEnv), mediaHTTPClient(metadataPolicy.RequestTimeout))
+		if clientErr != nil {
+			return fmt.Errorf("organization provider credentials are unavailable in %s", keyEnv)
+		}
+		if metadataPolicy.RetryLimit > 0 {
+			client.SetRetryLimit(metadataPolicy.RetryLimit)
+		}
+		policy := selected.Media.Organize
+		folderFormat := policy.FolderFormat
+		if selected.Type == "shows" && policy.SeriesFormat != "" {
+			folderFormat = policy.SeriesFormat
+		}
+		stableFor := 10 * time.Minute
+		if configured := strings.TrimSpace(policy.StableFor); configured != "" {
+			if parsed, parseErr := time.ParseDuration(configured); parseErr == nil {
+				stableFor = parsed
+			}
+		}
+		opts := organization.Options{IncludeProviderID: policy.IncludeProviderID, EnableDiscFolders: policy.DiscFolders, FlattenGroupingDirectories: !policy.PreserveGroupingDirectories, MinimumConfidence: policy.MinimumConfidence, FolderFormat: folderFormat, FileFormat: policy.FileFormat, SeasonFormat: policy.SeasonFormat, EpisodeFormat: policy.EpisodeFormat, Language: metadataPolicy.Language, FallbackLanguages: policy.EpisodeFallbackLanguages, AllowedExtensions: policy.AllowedExtensions, StableFor: stableFor, CompletionMarker: policy.CompletionMarker}
+		var plan organization.Report
+		var planErr error
+		if selected.Type == "shows" {
+			if existingOnly {
+				plan, planErr = organization.OrganizeExistingShows(ctx, coll, client, repo, opts, true, "")
+			} else {
+				plan, planErr = organization.OrganizeInboxShows(ctx, coll, client, repo, opts, true, "")
+			}
+		} else if existingOnly {
+			plan, planErr = organization.OrganizeExistingMovies(ctx, coll, client, repo, opts, true, "")
+		} else {
+			plan, planErr = organization.OrganizeInboxMovies(ctx, coll, client, repo, opts, true, "")
+		}
+		if planErr != nil {
+			return fmt.Errorf("plan organization for %q: %w", selected.ID, planErr)
+		}
+		report = plan
+	} else if args[0] == "metadata" {
+		policy := selected.Media.Metadata
+		if !policy.FetchNFO && !policy.FetchArtwork {
+			return errors.New("enable at least one metadata output to plan a metadata refresh")
+		}
+		providerName := strings.ToLower(strings.TrimSpace(policy.Provider))
+		if providerName == "" {
+			providerName = "tmdb"
+		}
+		if providerName != "tmdb" {
+			return fmt.Errorf("unsupported metadata provider %q", providerName)
+		}
+		keyEnv := strings.TrimSpace(policy.APIKeyEnv)
+		if keyEnv == "" {
+			keyEnv = "RCFIN_TMDB_API_KEY"
+		}
+		client, clientErr := provider.NewTMDb(os.Getenv(keyEnv), mediaHTTPClient(policy.RequestTimeout))
+		if clientErr != nil {
+			return fmt.Errorf("metadata provider credentials are unavailable in %s", keyEnv)
+		}
+		if policy.RetryLimit > 0 {
+			client.SetRetryLimit(policy.RetryLimit)
+		}
+		refreshAfter := 24 * time.Hour
+		if configured := strings.TrimSpace(policy.RefreshExistingAfter); configured != "" {
+			if parsed, parseErr := time.ParseDuration(configured); parseErr == nil {
+				refreshAfter = parsed
+			}
+		}
+		metadataReport, runErr := metadatarefresh.Run(ctx, coll, client, metadatarefresh.Options{Write: false, FetchNFO: policy.FetchNFO, FetchArtwork: policy.FetchArtwork, OverwriteExisting: policy.OverwriteExisting, OverwriteArtwork: policy.OverwriteArtwork, Language: policy.Language, FallbackLanguages: policy.FallbackLanguages, ArtworkMaxBytes: policy.ArtworkMaxBytes, ArtworkMaxWidth: policy.ArtworkMaxWidth, ArtworkMaxHeight: policy.ArtworkMaxHeight, ArtworkFormats: policy.ArtworkFormats, ArtworkPosterSize: policy.ArtworkPosterSize, ArtworkBackdropSize: policy.ArtworkBackdropSize, MinimumConfidence: policy.MinimumConfidence, RefreshExistingAfter: refreshAfter})
+		if runErr != nil {
+			return fmt.Errorf("plan metadata refresh for %q: %w", selected.ID, runErr)
+		}
+		report = metadataReport
+	} else {
+		policy := selected.Media.Subtitles
+		if len(policy.Languages) == 0 {
+			return errors.New("configure at least one subtitle language to plan subtitle refresh")
+		}
+		providerName := strings.ToLower(strings.TrimSpace(policy.Provider))
+		if providerName == "" {
+			providerName = "opensubtitles"
+		}
+		if providerName != "opensubtitles" {
+			return fmt.Errorf("unsupported subtitle provider %q", providerName)
+		}
+		apiKeyEnv := strings.TrimSpace(policy.APIKeyEnv)
+		if apiKeyEnv == "" {
+			apiKeyEnv = "RCFIN_OPENSUBTITLES_API_KEY"
+		}
+		usernameEnv := strings.TrimSpace(policy.UsernameEnv)
+		if usernameEnv == "" {
+			usernameEnv = "RCFIN_OPENSUBTITLES_USERNAME"
+		}
+		passwordEnv := strings.TrimSpace(policy.PasswordEnv)
+		if passwordEnv == "" {
+			passwordEnv = "RCFIN_OPENSUBTITLES_PASSWORD"
+		}
+		client, clientErr := subtitles.NewOpenSubtitles(os.Getenv(apiKeyEnv), os.Getenv(usernameEnv), os.Getenv(passwordEnv), mediaHTTPClient(policy.RequestTimeout))
+		if clientErr != nil {
+			return fmt.Errorf("subtitle provider credentials are unavailable in %s, %s, or %s", apiKeyEnv, usernameEnv, passwordEnv)
+		}
+		if policy.RetryLimit > 0 {
+			client.SetRetryLimit(policy.RetryLimit)
+		}
+		if policy.MaxDownloadBytes > 0 {
+			client.SetMaxDownloadBytes(policy.MaxDownloadBytes)
+		}
+		subtitleReport, runErr := subtitles.Refresh(ctx, coll, client, subtitles.RefreshOptions{Languages: policy.Languages, Formats: policy.Formats, HearingImpaired: policy.HearingImpaired, Forced: policy.Forced, OverwriteExisting: policy.OverwriteExisting, MinimumConfidence: policy.MinimumConfidence, Write: false})
+		if runErr != nil {
+			return fmt.Errorf("plan subtitle refresh for %q: %w", selected.ID, runErr)
+		}
+		report = subtitleReport
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(report)
+}
+
+func runMediaInventoryCommand(ctx context.Context, config configFile, args []string) error {
+	if len(args) < 1 || len(args) > 2 || (len(args) == 2 && args[1] != "--inbox") {
+		return errors.New("usage: rcfin media inventory LIBRARY_ID [--inbox]")
+	}
+	var selected *collectionConfig
+	for i := range config.Collections {
+		if config.Collections[i].ID == args[0] {
+			selected = &config.Collections[i]
+			break
+		}
+	}
+	if selected == nil {
+		return fmt.Errorf("unknown library ID %q", args[0])
+	}
+	if err := rclonestore.Configure(config.Rclone.Config, config.Rclone.CacheDir); err != nil {
+		return fmt.Errorf("configure Rclone: %w", err)
+	}
+	storage, err := rclonestore.New(ctx, selected.Remote, selected.VFS)
+	if err != nil {
+		return fmt.Errorf("open library %q: %w", selected.ID, err)
+	}
+	defer storage.Close()
+	inbox := selected.Media.InboxPath
+	if inbox == "" {
+		inbox = ".Inbox"
+	}
+	inboxOnly := len(args) == 2
+	entries, err := collection.InventoryCollection(ctx, &collection.Collection{ID: selected.ID, Type: collection.CollectionType(selected.Type), Storage: storage, InboxPath: inbox}, inbox, inboxOnly)
+	if err != nil {
+		return fmt.Errorf("inventory library %q: %w", selected.ID, err)
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(struct {
+		CollectionID string                      `json:"collection_id"`
+		Scope        string                      `json:"scope"`
+		Entries      []collection.InventoryEntry `json:"entries"`
+	}{CollectionID: selected.ID, Scope: map[bool]string{true: "inbox", false: "library"}[inboxOnly], Entries: entries})
 }
 
 func runUserCommand(ctx context.Context, repo database.Repository, libraries []collectionConfig, args []string) error {

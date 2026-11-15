@@ -274,55 +274,75 @@ func makeJFProviderIds(providerIDs map[string]string) JFProviderIds {
 }
 
 func (j *Jellyfin) makeMediaSource(item collection.Item) (mediasources []JFMediaSources) {
-	filename := item.FileName()
-	mediasource := JFMediaSources{
-		ID:                    item.ID(),
-		ETag:                  item.Etag(),
-		Name:                  filename,
-		Path:                  filename,
-		Type:                  "Default",
-		Container:             "mp4",
-		Protocol:              "File",
-		VideoType:             "VideoFile",
-		Size:                  item.FileSize(),
-		IsRemote:              false,
-		ReadAtNativeFramerate: false,
-		HasSegments:           false,
-		IgnoreDts:             false,
-		IgnoreIndex:           false,
-		GenPtsInput:           false,
-		// We do not support transcoding by server
-		SupportsTranscoding:    false,
-		SupportsDirectStream:   true,
-		SupportsDirectPlay:     true,
-		IsInfiniteStream:       false,
-		RequiresOpening:        false,
-		RequiresClosing:        false,
-		RequiresLooping:        false,
-		SupportsProbing:        true,
-		TranscodingSubProtocol: "http",
-		Formats:                []string{},
-		MediaAttachments:       []JFMediaAttachments{},
-		RunTimeTicks:           makeRuntimeTicks(item.Duration()),
-		// File bitrate/s is sum of audio and video bitrate
-		Bitrate:      item.VideoBitrate() + item.AudioBitrate(),
-		MediaStreams: j.makeJFMediaStreams(item),
-		// We assume audio stream is always at index 1 by makeJFMediaStreams()
-		DefaultAudioStreamIndex:    1,
-		DefaultSubtitleStreamIndex: -1,
-	}
-	for _, stream := range mediasource.MediaStreams {
-		if stream.Type == "Subtitle" && stream.IsDefault {
-			mediasource.DefaultSubtitleStreamIndex = stream.Index
-			break
+	versions := []collection.MediaVersion{{ID: item.ID(), Name: item.FileName(), FileName: item.FileName(), Size: item.FileSize()}}
+	if versioned, ok := item.(collection.VersionedItem); ok {
+		if declared := versioned.MediaVersions(); len(declared) > 0 {
+			versions = declared
 		}
 	}
-
-	return []JFMediaSources{mediasource}
+	for _, version := range versions {
+		filename := version.FileName
+		if filename == "" {
+			continue
+		}
+		label := version.Name
+		if label == "" {
+			label = filename
+		}
+		container := strings.TrimPrefix(strings.ToLower(path.Ext(filename)), ".")
+		mediasource := JFMediaSources{
+			ID:                    version.ID,
+			ETag:                  item.Etag(),
+			Name:                  label,
+			Path:                  filename,
+			Type:                  "Default",
+			Container:             container,
+			Protocol:              "File",
+			VideoType:             "VideoFile",
+			Size:                  version.Size,
+			IsRemote:              false,
+			ReadAtNativeFramerate: false,
+			HasSegments:           false,
+			IgnoreDts:             false,
+			IgnoreIndex:           false,
+			GenPtsInput:           false,
+			// We do not support transcoding by server
+			SupportsTranscoding:    false,
+			SupportsDirectStream:   true,
+			SupportsDirectPlay:     true,
+			IsInfiniteStream:       false,
+			RequiresOpening:        false,
+			RequiresClosing:        false,
+			RequiresLooping:        false,
+			SupportsProbing:        true,
+			TranscodingSubProtocol: "http",
+			Formats:                []string{},
+			MediaAttachments:       []JFMediaAttachments{},
+			RunTimeTicks:           makeRuntimeTicks(item.Duration()),
+			// File bitrate/s is sum of audio and video bitrate
+			Bitrate:      item.VideoBitrate() + item.AudioBitrate(),
+			MediaStreams: j.makeJFMediaStreamsForSource(item, version.ID),
+			// We assume audio stream is always at index 1 by makeJFMediaStreams()
+			DefaultAudioStreamIndex:    1,
+			DefaultSubtitleStreamIndex: -1,
+		}
+		for _, stream := range mediasource.MediaStreams {
+			if stream.Type == "Subtitle" && stream.IsDefault {
+				mediasource.DefaultSubtitleStreamIndex = stream.Index
+				break
+			}
+		}
+		mediasources = append(mediasources, mediasource)
+	}
+	return mediasources
 }
 
 // makeJFMediaStreams creates media stream information for the provided item
 func (j *Jellyfin) makeJFMediaStreams(item collection.Item) []JFMediaStreams {
+	return j.makeJFMediaStreamsForSource(item, item.ID())
+}
+
+func (j *Jellyfin) makeJFMediaStreamsForSource(item collection.Item, mediaSourceID string) []JFMediaStreams {
 	videostream := JFMediaStreams{
 		Index:              0,
 		Type:               "Video",
@@ -442,7 +462,7 @@ func (j *Jellyfin) makeJFMediaStreams(item collection.Item) []JFMediaStreams {
 	if _, ok := item.(*collection.Episode); ok {
 		routeItemID = itemprefix_episode + itemID
 	}
-	for i, sub := range collection.SidecarSubtitles(item) {
+	for i, sub := range collection.SidecarSubtitlesForVersion(item, mediaSourceID) {
 		codec := "subrip"
 		format := "vtt"
 		if strings.EqualFold(path.Ext(sub.Path), ".vtt") {
@@ -459,7 +479,7 @@ func (j *Jellyfin) makeJFMediaStreams(item collection.Item) []JFMediaStreams {
 			Index: 2 + i, Type: "Subtitle", Codec: codec, Language: sub.Lang,
 			Title: title, DisplayTitle: title, IsExternal: true, IsDefault: sub.IsDefault,
 			IsForced: sub.IsForced, IsHearingImpaired: sub.IsHearingImpaired,
-			DeliveryMethod: "External", DeliveryUrl: fmt.Sprintf("/Videos/%s/%s/Subtitles/%d/0/Stream.%s", routeItemID, item.ID(), 2+i, format),
+			DeliveryMethod: "External", DeliveryUrl: fmt.Sprintf("/Videos/%s/%s/Subtitles/%d/0/Stream.%s", routeItemID, mediaSourceID, 2+i, format),
 			IsExternalUrl: false, IsTextSubtitleStream: true, SupportsExternalStream: true,
 			LocalizedExternal: "External",
 		})

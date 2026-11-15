@@ -59,6 +59,21 @@ type Item interface {
 	OfficialRating() string
 }
 
+// MediaVersion describes one playable file that belongs to a single library
+// item, such as an alternate cut of a movie.
+type MediaVersion struct {
+	ID        string
+	Name      string
+	FileName  string
+	Size      int64
+	Subtitles Subtitles
+}
+
+// VersionedItem is implemented by items with multiple playable files.
+type VersionedItem interface {
+	MediaVersions() []MediaVersion
+}
+
 // Movie represents a movie in a collection.
 type Movie struct {
 	// id is the unique identifier for the movie. Typically Idhash() of name.
@@ -84,7 +99,8 @@ type Movie struct {
 	// Filename, e.g. "casablanca.mp4"
 	fileName string
 	// fileSize is the size of the video file in bytes.
-	fileSize int64
+	fileSize      int64
+	mediaVersions []MediaVersion
 	// Metadata holds the metadata for the movie, e.g. from NFO file.
 	Metadata metadata.Metadata
 
@@ -99,17 +115,24 @@ func (m *Movie) Etag() string {
 	}
 	return m.etag
 }
-func (m *Movie) Name() string              { return m.name }
-func (m *Movie) SortName() string          { return m.sortName }
-func (m *Movie) Path() string              { return m.path }
-func (m *Movie) Created() time.Time        { return m.created }
-func (m *Movie) Banner() string            { return m.banner }
-func (m *Movie) Fanart() string            { return m.fanart }
-func (m *Movie) Folder() string            { return m.folder }
-func (m *Movie) Poster() string            { return m.poster }
-func (m *Movie) Logo() string              { return "" }
-func (m *Movie) FileName() string          { return m.fileName }
-func (m *Movie) FileSize() int64           { return m.fileSize }
+func (m *Movie) Name() string       { return m.name }
+func (m *Movie) SortName() string   { return m.sortName }
+func (m *Movie) Path() string       { return m.path }
+func (m *Movie) Created() time.Time { return m.created }
+func (m *Movie) Banner() string     { return m.banner }
+func (m *Movie) Fanart() string     { return m.fanart }
+func (m *Movie) Folder() string     { return m.folder }
+func (m *Movie) Poster() string     { return m.poster }
+func (m *Movie) Logo() string       { return "" }
+func (m *Movie) FileName() string   { return m.fileName }
+func (m *Movie) FileSize() int64    { return m.fileSize }
+func (m *Movie) MediaVersions() []MediaVersion {
+	versions := append([]MediaVersion(nil), m.mediaVersions...)
+	for i := range versions {
+		versions[i].Subtitles = append(Subtitles(nil), versions[i].Subtitles...)
+	}
+	return versions
+}
 func (m *Movie) Duration() time.Duration   { return m.Metadata.Duration() }
 func (m *Movie) VideoCodec() string        { return m.Metadata.VideoCodec() }
 func (m *Movie) VideoBitrate() int         { return m.Metadata.VideoBitrate() }
@@ -428,6 +451,23 @@ func SidecarSubtitles(item Item) Subtitles {
 	default:
 		return nil
 	}
+}
+
+// SidecarSubtitlesForVersion returns the external subtitles associated with a
+// specific media source, falling back to the item's primary source when the
+// item has no alternate versions.
+func SidecarSubtitlesForVersion(item Item, mediaSourceID string) Subtitles {
+	if versioned, ok := item.(VersionedItem); ok {
+		for _, version := range versioned.MediaVersions() {
+			if version.ID == mediaSourceID {
+				return append(Subtitles(nil), version.Subtitles...)
+			}
+		}
+	}
+	if mediaSourceID == item.ID() {
+		return SidecarSubtitles(item)
+	}
+	return nil
 }
 
 // makeSortName returns a name suitable for sorting.

@@ -1,6 +1,7 @@
 package imageresize
 
 import (
+	"context"
 	"log"
 	"os"
 	"path/filepath"
@@ -19,7 +20,19 @@ var isCacheFile = regexp.MustCompile(`^[0-9a-f]{32}(:[0-9]+x[0-9]+q=[0-9]+)?$`)
 // the current identity-hash naming scheme, so entries from other tools are
 // left alone. Pass maxAge <= 0 to disable eviction.
 func (r *Resizer) CleanCache(maxAge, interval time.Duration) {
+	r.CleanCacheContext(context.Background(), maxAge, interval)
+}
+
+// CleanCacheContext periodically evicts stale cache files until ctx is
+// cancelled, allowing server shutdown to wait for cache maintenance to stop.
+func (r *Resizer) CleanCacheContext(ctx context.Context, maxAge, interval time.Duration) {
+	if interval <= 0 {
+		interval = time.Hour
+	}
 	for {
+		if ctx.Err() != nil {
+			return
+		}
 		if maxAge > 0 && r.cachedir != "" {
 			cutoff := time.Now().Add(-maxAge)
 			entries, err := os.ReadDir(r.cachedir)
@@ -27,6 +40,9 @@ func (r *Resizer) CleanCache(maxAge, interval time.Duration) {
 				log.Printf("image cache cleanup: %v", err)
 			} else {
 				for _, entry := range entries {
+					if ctx.Err() != nil {
+						return
+					}
 					if entry.IsDir() {
 						continue
 					}
@@ -45,6 +61,12 @@ func (r *Resizer) CleanCache(maxAge, interval time.Duration) {
 				}
 			}
 		}
-		time.Sleep(interval)
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
 	}
 }

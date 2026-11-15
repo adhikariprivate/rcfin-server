@@ -5,7 +5,10 @@ package collection
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/adhikariprivate/rcfin-server/internal/collection/search"
@@ -20,6 +23,7 @@ type CollectionRepo struct {
 	repo           database.Repository
 	bleveIndex     *search.Search
 	rescanInterval time.Duration
+	refreshMu      sync.Mutex
 }
 
 type Options struct {
@@ -48,6 +52,13 @@ func (cr *CollectionRepo) Close() {
 // AddCollection adds a new content collection to the repository.
 func (cr *CollectionRepo) AddCollection(name string, ID string,
 	collectiontype string, remote string, storage *rclonestore.Library) {
+	cr.AddCollectionWithInbox(name, ID, collectiontype, remote, storage, ".Inbox")
+}
+
+// AddCollectionWithInbox configures a collection and its explicit intake path.
+// An empty inbox disables inbox exclusion.
+func (cr *CollectionRepo) AddCollectionWithInbox(name string, ID string,
+	collectiontype string, remote string, storage *rclonestore.Library, inbox string) {
 
 	var ct CollectionType
 	switch collectiontype {
@@ -61,11 +72,12 @@ func (cr *CollectionRepo) AddCollection(name string, ID string,
 	}
 
 	c := Collection{
-		Name:    name,
-		ID:      ID,
-		Type:    ct,
-		Remote:  remote,
-		Storage: storage,
+		Name:      name,
+		ID:        ID,
+		Type:      ct,
+		Remote:    remote,
+		Storage:   storage,
+		InboxPath: inbox,
 	}
 	// If no collection ID is provided, generate one based upon the name.
 	if c.ID == "" {
@@ -79,11 +91,22 @@ func (cr *CollectionRepo) AddCollection(name string, ID string,
 
 // Init starts scanning the repository for contents for the first time.
 func (cr *CollectionRepo) Init() {
+	_ = cr.InitContext(context.Background())
+}
+
+// InitContext performs the initial scan and search-index build and can be
+// cancelled while traversing collection directories.
+func (cr *CollectionRepo) InitContext(ctx context.Context) error {
+	cr.refreshMu.Lock()
+	defer cr.refreshMu.Unlock()
 	log.Printf("Initializing collections..")
 	// scan all collections without delay
-	cr.updateCollections(0)
+	cr.updateCollections(ctx, 0)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// Build search index
-	cr.BuildSearchIndex(context.Background())
+	return cr.BuildSearchIndex(ctx)
 }
 
 // Background keeps scanning the repository for content changes continously.
@@ -109,35 +132,112 @@ func (cr *CollectionRepo) Background(ctx context.Context) {
 // index. Directory caches are flushed first so the scan observes current
 // remote state regardless of the configured dir cache time.
 func (cr *CollectionRepo) Refresh(ctx context.Context) {
+	cr.refreshMu.Lock()
+	defer cr.refreshMu.Unlock()
 	log.Printf("Manual collection refresh..")
-	cr.updateCollections(0)
+	cr.updateCollections(ctx, 0)
+	if ctx.Err() != nil {
+		return
+	}
 	cr.BuildSearchIndex(ctx)
+}
+
+// RefreshCollection rescans one collection and rebuilds the shared search
+// index so completed media moves appear at their final paths immediately.
+func (cr *CollectionRepo) RefreshCollection(ctx context.Context, collectionID string) error {
+	cr.refreshMu.Lock()
+	defer cr.refreshMu.Unlock()
+	c := cr.GetCollection(collectionID)
+	if c == nil {
+		return fmt.Errorf("collection %q not found", collectionID)
+	}
+	c.stableItemIDs = cr.loadStableItemIDs(ctx, c.ID)
+	if c.Storage != nil {
+		c.Storage.FlushDirCache()
+	}
+	switch c.Type {
+	case CollectionTypeMovies:
+		cr.buildMovies(ctx, c, 0)
+	case CollectionTypeShows:
+		cr.buildShows(ctx, c, 0)
+	default:
+		return fmt.Errorf("unsupported collection type %q", c.Type)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return cr.BuildSearchIndex(ctx)
 }
 
 // updateCollections updates the collections with the latest content from remote storage.
 // - ScanInterval can be set as wait time between loading details of individual items.
 // This can be useful to avoid overloading the remote with too many requests.
-func (cr *CollectionRepo) updateCollections(scanInterval time.Duration) {
+func (cr *CollectionRepo) updateCollections(ctx context.Context, scanInterval time.Duration) {
 	for i := range cr.collections {
+		if ctx.Err() != nil {
+			return
+		}
 		c := &(cr.collections[i])
+		c.stableItemIDs = cr.loadStableItemIDs(ctx, c.ID)
 		// Drop cached listings so each rescan observes current remote state.
 		if c.Storage != nil {
 			c.Storage.FlushDirCache()
 		}
 		switch c.Type {
 		case CollectionTypeMovies:
-			cr.buildMovies(c, scanInterval)
+			cr.buildMovies(ctx, c, scanInterval)
 		case CollectionTypeShows:
-			cr.buildShows(c, scanInterval)
+			cr.buildShows(ctx, c, scanInterval)
 		default:
 			log.Printf("Unknown collection type %s, skipping", c.Type)
 		}
 	}
 }
 
+func (cr *CollectionRepo) loadStableItemIDs(ctx context.Context, collectionID string) map[string]stableItemIdentity {
+	if cr.repo == nil {
+		return nil
+	}
+	operations, err := database.ListAllMediaOperations(ctx, cr.repo, collectionID)
+	if err != nil {
+		log.Printf("Unable to load stable item IDs for collection %q: %v", collectionID, err)
+		return nil
+	}
+	stableIDs := make(map[string]stableItemIdentity)
+	for _, operation := range operations {
+		if operation.Status != "complete" && operation.Status != "completed" {
+			continue
+		}
+		if operation.Action != "stage_existing" && operation.Action != "move_directory" && operation.Action != "move_directory:root" {
+			continue
+		}
+		if operation.DestinationPath == "" || stableIDs[operation.DestinationPath].ID != "" {
+			continue
+		}
+		var evidence struct {
+			StableItemID string `json:"stable_item_id"`
+		}
+		if json.Unmarshal([]byte(operation.Evidence), &evidence) == nil && evidence.StableItemID != "" {
+			stableIDs[operation.DestinationPath] = stableItemIdentity{ID: evidence.StableItemID, ProviderID: operation.ProviderID}
+		}
+	}
+	return stableIDs
+}
+
 // GetCollections returns all collections in the repository.
 func (cr *CollectionRepo) GetCollections() Collections {
 	return cr.collections
+}
+
+// Inventory returns a deterministic read-only inventory for a configured
+// collection. Set inboxOnly to inspect only the explicitly configured intake
+// subtree; normal inventory always excludes it.
+func (cr *CollectionRepo) Inventory(ctx context.Context, collectionID string, inboxOnly bool) ([]InventoryEntry, error) {
+	c := cr.GetCollection(collectionID)
+	if c == nil {
+		return nil, fmt.Errorf("collection %q not found", collectionID)
+	}
+	return InventoryCollection(ctx, c, c.InboxPath, inboxOnly)
 }
 
 // GetCollection returns a collection by its ID.

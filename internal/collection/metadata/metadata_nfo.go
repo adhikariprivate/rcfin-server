@@ -141,8 +141,18 @@ func (n *MetadataNfo) ProviderIDs() map[string]string {
 	for _, id := range n.nfo.UniqueIDs {
 		if id.Default == "true" || id.Default == "1" {
 			ids["default"] = id.Value
-		} else if id.Type != "" && id.Value != "" {
-			ids[strings.ToLower(id.Type)] = id.Value
+		}
+		if id.Type != "" && id.Value != "" {
+			provider := strings.ToLower(strings.TrimSpace(id.Type))
+			switch provider {
+			case "tmdbid":
+				provider = "tmdb"
+			case "tvdbid":
+				provider = "tvdb"
+			case "imdbid":
+				provider = "imdb"
+			}
+			ids[provider] = id.Value
 		}
 	}
 	return ids

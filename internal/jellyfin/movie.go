@@ -3,6 +3,8 @@ package jellyfin
 import (
 	"context"
 	"net/http"
+	"path"
+	"strings"
 
 	"github.com/adhikariprivate/rcfin-server/internal/collection"
 )
@@ -38,7 +40,7 @@ func (j *Jellyfin) makeJFItemMovie(ctx context.Context, userID string, movie *co
 		Etag:                    movie.Etag(),
 		MediaType:               "Video",
 		VideoType:               "VideoFile",
-		Container:               "mov,mp4,m4a",
+		Container:               strings.TrimPrefix(strings.ToLower(path.Ext(movie.FileName())), "."),
 		DateCreated:             movie.Created().UTC(),
 		PrimaryImageAspectRatio: 0.6666666666666666,
 		CanDelete:               new(false),

@@ -184,3 +184,27 @@ type ImageMetadata struct {
 	// UpdatedAt is the time the image was last received and stored.
 	UpdatedAt time.Time
 }
+
+// MediaOperation records one resumable metadata, subtitle, or organization
+// operation. Evidence and errors are sanitized JSON/text without credentials.
+type MediaOperation struct {
+	ID              string    `db:"id"`
+	CollectionID    string    `db:"collection_id"`
+	ItemKey         string    `db:"item_key"`
+	SourcePath      string    `db:"source_path"`
+	DestinationPath string    `db:"destination_path"`
+	Action          string    `db:"action"`
+	Status          string    `db:"status"`
+	ProviderID      string    `db:"provider_id"`
+	Confidence      float64   `db:"confidence"`
+	Evidence        string    `db:"evidence"`
+	Attempts        int       `db:"attempts"`
+	NextAttempt     time.Time `db:"next_attempt"`
+	LeaseOwner      string    `db:"lease_owner"`
+	LeaseUntil      time.Time `db:"lease_until"`
+	Bytes           int64     `db:"bytes"`
+	Checksum        string    `db:"checksum"`
+	Error           string    `db:"error"`
+	CreatedAt       time.Time `db:"created_at"`
+	UpdatedAt       time.Time `db:"updated_at"`
+}

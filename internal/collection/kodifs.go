@@ -2,6 +2,7 @@
 package collection
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"path"
@@ -16,11 +17,11 @@ import (
 	"github.com/adhikariprivate/rcfin-server/internal/idhash"
 )
 
-var isVideo = regexp.MustCompile(`^(.*)\.(divx|mov|mp4|MP4|m4u|m4v)$`)
+var isVideo = regexp.MustCompile("(?i)^(.*)\\.(" + strings.Join(videoExtensionNames, "|") + ")$")
 var isImage = regexp.MustCompile(`^(.+)\.(jpg|jpeg|png|tbn)$`)
 var isImageExt = regexp.MustCompile(`^(jpg|jpeg|png|tbn)$`)
 var isSeasonImg = regexp.MustCompile(`^season([0-9]+)-?([a-z]+|)\.(jpg|jpeg|png|tbn)$`)
-var isShowSubdir = regexp.MustCompile(`^S([0-9]+)|Specials([0-9]*)$`)
+var isShowSubdir = regexp.MustCompile(`(?i)^(?:S([0-9]+)|Season[ ._-]*([0-9]+)|Specials([0-9]*))$`)
 var isExt1 = regexp.MustCompile(`^(.*)()\.(png|jpg|jpeg|tbn|nfo|srt|vtt)$`)
 var isExt2 = regexp.MustCompile(`^(.*)[.-]([a-z]+)\.(png|jpg|jpeg|tbn|nfo|srt|vtt)$`)
 var isYear = regexp.MustCompile(` \(([0-9]+)\)$`)
@@ -34,32 +35,59 @@ type epMapType struct {
 // buildMovies builds the movies in a collection. pace is the time to wait
 // between processing each movie directory, to avoid overloading the filesystem.
 // If pace is 0, no waiting is done.
-func (cr *CollectionRepo) buildMovies(coll *Collection, pace time.Duration) (items []Item) {
-	f, err := OpenDir(coll.Storage, "")
-	if err != nil {
+func (cr *CollectionRepo) buildMovies(ctx context.Context, coll *Collection, pace time.Duration) (items []Item) {
+	inventory, inventoryErr := InventoryCollection(ctx, coll, coll.InboxPath, false)
+	if inventoryErr != nil {
+		log.Printf("Unable to inventory movie library %q: %v", coll.Name, inventoryErr)
 		return
 	}
-	defer f.Close()
-	fi, err := f.Readdir(0)
-	if err != nil {
-		log.Printf("Unable to list collection %q: %v", coll.Name, err)
+	videoByDirectory := map[string][]string{}
+	for _, entry := range inventory {
+		if entry.Role == InventoryVideo && !entry.IsDir {
+			videoByDirectory[path.Dir(entry.Path)] = append(videoByDirectory[path.Dir(entry.Path)], entry.Path)
+		}
+	}
+	directories := make([]string, 0, len(videoByDirectory))
+	for directory := range videoByDirectory {
+		if directory != "." {
+			directories = append(directories, directory)
+		}
+	}
+	sort.Strings(directories)
+	if len(directories) == 0 {
+		coll.Items = nil
 		return
 	}
-	if len(fi) == 0 {
-		return
-	}
-	for _, f := range fi {
-		name := f.Name()
-		if (len(name) > 0 && name[:1] == ".") ||
-			(len(name) > 1 && name[:2] == "+ ") {
+	for _, name := range directories {
+		if ctx.Err() != nil {
+			return nil
+		}
+		if coll.isInboxPath(name) || strings.HasPrefix(path.Base(name), ".") || strings.HasPrefix(path.Base(name), "+ ") {
 			continue
 		}
-		m := cr.buildMovie(coll, name)
+		videos := videoByDirectory[name]
+		sort.Strings(videos)
+		folderBase := path.Base(name)
+		sort.SliceStable(videos, func(i, j int) bool {
+			iMatches := strings.TrimSuffix(path.Base(videos[i]), path.Ext(videos[i])) == folderBase
+			jMatches := strings.TrimSuffix(path.Base(videos[j]), path.Ext(videos[j])) == folderBase
+			if iMatches != jMatches {
+				return iMatches
+			}
+			return videos[i] < videos[j]
+		})
+		m := cr.buildMovie(ctx, coll, name, videos)
 		if m != nil {
 			items = append(items, m)
 		}
 		if pace > 0 {
-			time.Sleep(pace)
+			timer := time.NewTimer(pace)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil
+			case <-timer.C:
+			}
 		}
 	}
 	coll.Items = items
@@ -68,7 +96,10 @@ func (cr *CollectionRepo) buildMovies(coll *Collection, pace time.Duration) (ite
 
 // buildMovie builds a movie item from a movie directory. It scans the directory
 // for video files and images, and returns an Item.
-func (cr *CollectionRepo) buildMovie(coll *Collection, dir string) (movie *Movie) {
+func (cr *CollectionRepo) buildMovie(ctx context.Context, coll *Collection, dir string, videoPaths []string) (movie *Movie) {
+	if ctx.Err() != nil {
+		return nil
+	}
 	d := dir
 	f, err := OpenDir(coll.Storage, d)
 	if err != nil {
@@ -86,11 +117,18 @@ func (cr *CollectionRepo) buildMovie(coll *Collection, dir string) (movie *Movie
 	mname := path.Base(dir)
 
 	var base, video string
+	selectedVideo := ""
+	if len(videoPaths) > 0 {
+		selectedVideo = videoPaths[0]
+	}
 	var filesize int64
 	var created time.Time
 	for _, f := range fi {
+		if ctx.Err() != nil {
+			return nil
+		}
 		s := isVideo.FindStringSubmatch(f.Name())
-		if len(s) > 0 {
+		if len(s) > 0 && path.Join(dir, f.Name()) == selectedVideo {
 			video = s[0]
 			base = s[1]
 			filesize = f.Size()
@@ -124,7 +162,13 @@ func (cr *CollectionRepo) buildMovie(coll *Collection, dir string) (movie *Movie
 	}
 
 	for _, f := range fi {
+		if ctx.Err() != nil {
+			return nil
+		}
 		name := f.Name()
+		if coll.isInboxPath(name) {
+			continue
+		}
 		if subtitle, format, ok := parseSubtitleSidecar(base, name); ok {
 			if format == "srt" {
 				movie.SrtSubs = append(movie.SrtSubs, subtitle)
@@ -184,6 +228,47 @@ func (cr *CollectionRepo) buildMovie(coll *Collection, dir string) (movie *Movie
 	if movie.Metadata == nil {
 		movie.Metadata = metadata.NewFilename(movie.name, year)
 	}
+	if stableID := coll.StableItemID(dir, movie.Metadata.ProviderIDs()); stableID != "" {
+		movie.id = stableID
+	} else if stableID, ok := stableProviderID("movie", movie.Metadata.ProviderIDs()); ok {
+		movie.id = stableID
+	}
+	if len(videoPaths) > 1 {
+		labels := make(map[string]int, len(videoPaths))
+		for _, videoPath := range videoPaths {
+			labels[strings.TrimSuffix(path.Base(videoPath), path.Ext(videoPath))]++
+		}
+		for _, videoPath := range videoPaths {
+			filename := path.Base(videoPath)
+			stem := strings.TrimSuffix(filename, path.Ext(filename))
+			label := stem
+			if stem == mname {
+				label = "Original"
+			}
+			if labels[stem] > 1 {
+				label += " (" + strings.TrimPrefix(strings.ToUpper(path.Ext(filename)), ".") + ")"
+			}
+			size := int64(0)
+			for _, info := range fi {
+				if info.Name() == filename {
+					size = info.Size()
+					break
+				}
+			}
+			id := movie.id
+			if videoPath != selectedVideo {
+				id = idhash.IdHash(movie.id + "\x00" + videoPath)
+			}
+			version := MediaVersion{ID: id, Name: label, FileName: filename, Size: size}
+			versionBase := strings.TrimSuffix(filename, path.Ext(filename))
+			for _, info := range fi {
+				if subtitle, _, ok := parseSubtitleSidecar(versionBase, info.Name()); ok {
+					version.Subtitles = append(version.Subtitles, subtitle)
+				}
+			}
+			movie.mediaVersions = append(movie.mediaVersions, version)
+		}
+	}
 
 	dbItemMovie := &model.Item{
 		ID:    movie.id,
@@ -200,32 +285,51 @@ func (cr *CollectionRepo) buildMovie(coll *Collection, dir string) (movie *Movie
 // buildMovies builds the movies in a collection. pace is the time to wait
 // between processing each movie directory, to avoid overloading the filesystem.
 // If pace is 0, no waiting is done.
-func (cr *CollectionRepo) buildShows(coll *Collection, pace time.Duration) (items []Item) {
-	f, err := OpenDir(coll.Storage, "")
-	if err != nil {
+func (cr *CollectionRepo) buildShows(ctx context.Context, coll *Collection, pace time.Duration) (items []Item) {
+	inventory, inventoryErr := InventoryCollection(ctx, coll, coll.InboxPath, false)
+	if inventoryErr != nil {
+		log.Printf("Unable to inventory TV library %q: %v", coll.Name, inventoryErr)
 		return
 	}
-	defer f.Close()
-	fi, err := f.Readdir(0)
-	if err != nil {
-		log.Printf("Unable to list show library %q: %v", coll.Name, err)
+	playablePaths := map[string]InventoryEntry{}
+	showDirectories := map[string]bool{}
+	for _, entry := range inventory {
+		if entry.Role == InventoryVideo && !entry.IsDir {
+			playablePaths[entry.Path] = entry
+			root := InventoryShowRoot(entry.Path)
+			if root != "" && root != "." {
+				showDirectories[root] = true
+			}
+		}
+	}
+	directories := make([]string, 0, len(showDirectories))
+	for directory := range showDirectories {
+		directories = append(directories, directory)
+	}
+	sort.Strings(directories)
+	if len(directories) == 0 {
+		coll.Items = nil
 		return
 	}
-	if len(fi) == 0 {
-		return
-	}
-	for _, f := range fi {
-		name := f.Name()
-		if (len(name) > 0 && name[:1] == ".") ||
-			(len(name) > 1 && name[:2] == "+ ") {
+	for _, name := range directories {
+		if ctx.Err() != nil {
+			return nil
+		}
+		if coll.isInboxPath(name) || strings.HasPrefix(path.Base(name), ".") || strings.HasPrefix(path.Base(name), "+ ") {
 			continue
 		}
-		m := cr.buildShow(coll, name)
+		m := cr.buildShow(ctx, coll, name, playablePaths)
 		if m != nil {
 			items = append(items, m)
 		}
 		if pace > 0 {
-			time.Sleep(pace)
+			timer := time.NewTimer(pace)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil
+			case <-timer.C:
+			}
 		}
 	}
 	coll.Items = items
@@ -282,8 +386,14 @@ func epMatch(epMap map[string]epMapType, s []string) (ep *Episode, aux, ext stri
 
 // showScanDir scans a show directory for episodes and images. It updates the
 // show item with the found episodes and images.
-func (cr *CollectionRepo) showScanDir(coll *Collection, showDir, baseDir, seasonDir string, seasonHint int, show *Show) {
+func (cr *CollectionRepo) showScanDir(ctx context.Context, coll *Collection, showDir, baseDir, seasonDir string, seasonHint int, show *Show, playablePaths map[string]InventoryEntry) {
+	if ctx.Err() != nil {
+		return
+	}
 	d := path.Join(baseDir, seasonDir)
+	if coll.isInboxPath(d) {
+		return
+	}
 	f, err := OpenDir(coll.Storage, d)
 	if err != nil {
 		return
@@ -301,6 +411,9 @@ func (cr *CollectionRepo) showScanDir(coll *Collection, showDir, baseDir, season
 	epMap := make(map[string]epMapType)
 
 	for _, f := range fi {
+		if ctx.Err() != nil {
+			return
+		}
 		fn := f.Name()
 
 		// first things that can only be found in the
@@ -310,8 +423,14 @@ func (cr *CollectionRepo) showScanDir(coll *Collection, showDir, baseDir, season
 			// S* subdir.
 			s := isShowSubdir.FindStringSubmatch(fn)
 			if len(s) > 0 {
-				sn := parseInt(s[1])
-				cr.showScanDir(coll, showDir, d, fn, sn, show)
+				sn := 0
+				for _, part := range s[1:] {
+					if part != "" {
+						sn = parseInt(part)
+						break
+					}
+				}
+				cr.showScanDir(ctx, coll, showDir, d, fn, sn, show, playablePaths)
 				continue
 			}
 
@@ -393,7 +512,8 @@ func (cr *CollectionRepo) showScanDir(coll *Collection, showDir, baseDir, season
 
 		// episodes can be in main dir or subdir.
 		s = isVideo.FindStringSubmatch(fn)
-		if len(s) > 0 {
+		entry, classified := playablePaths[path.Join(d, fn)]
+		if len(s) > 0 && classified && (len(entry.Episodes) > 0 || entry.AirDate != "") {
 			ep := Episode{
 				id:       idhash.IdHash(s[0]),
 				path:     showDir,
@@ -462,7 +582,10 @@ func (cr *CollectionRepo) showScanDir(coll *Collection, showDir, baseDir, season
 
 // buildShow builds a show item from a show directory.
 // It scans the directory for episodes and images, and returns an Item
-func (cr *CollectionRepo) buildShow(coll *Collection, dir string) (show *Show) {
+func (cr *CollectionRepo) buildShow(ctx context.Context, coll *Collection, dir string, playablePaths map[string]InventoryEntry) (show *Show) {
+	if ctx.Err() != nil {
+		return nil
+	}
 	name := path.Base(dir)
 	item := &Show{
 		id:       idhash.IdHash(name),
@@ -471,7 +594,10 @@ func (cr *CollectionRepo) buildShow(coll *Collection, dir string) (show *Show) {
 		path:     dir,
 	}
 	d := dir
-	cr.showScanDir(coll, dir, d, "", -1, item)
+	cr.showScanDir(ctx, coll, dir, d, "", -1, item, playablePaths)
+	if ctx.Err() != nil {
+		return nil
+	}
 
 	for i := range item.Seasons {
 		s := &(item.Seasons[i])
@@ -536,6 +662,24 @@ func (cr *CollectionRepo) buildShow(coll *Collection, dir string) (show *Show) {
 		item.Metadata = metadata.NewFilename(item.name, year)
 	}
 	item.Metadata.SetYear(year)
+	stableShowID := false
+	if stableID := coll.StableItemID(dir, item.Metadata.ProviderIDs()); stableID != "" {
+		item.id = stableID
+		stableShowID = true
+	} else if stableID, ok := stableProviderID("show", item.Metadata.ProviderIDs()); ok {
+		item.id = stableID
+		stableShowID = true
+	}
+	if stableShowID {
+		for seasonIndex := range item.Seasons {
+			season := &item.Seasons[seasonIndex]
+			season.id = idhash.IdHash(fmt.Sprintf("%s-season-%d", item.id, season.seasonno))
+			for episodeIndex := range season.Episodes {
+				episode := &season.Episodes[episodeIndex]
+				episode.id = idhash.IdHash(fmt.Sprintf("%s-S%02dE%02d", item.id, episode.SeasonNo, episode.EpisodeNo))
+			}
+		}
+	}
 
 	dbItemShow := &model.Item{
 		ID:    item.id,
@@ -545,6 +689,45 @@ func (cr *CollectionRepo) buildShow(coll *Collection, dir string) (show *Show) {
 	}
 	cr.repo.DbLoadItem(dbItemShow)
 	return
+}
+
+func stableProviderID(kind string, providerIDs map[string]string) (string, bool) {
+	if len(providerIDs) == 0 {
+		return "", false
+	}
+	normalized := make(map[string]string, len(providerIDs))
+	for providerName, value := range providerIDs {
+		normalized[strings.ToLower(strings.TrimSpace(providerName))] = strings.TrimSpace(value)
+	}
+	preferred := []string{"tmdb", "tmdbid", "tvdb", "tvdbid", "imdb", "imdbid"}
+	for _, providerName := range preferred {
+		if value := normalized[providerName]; value != "" {
+			return idhash.IdHash(kind + ":" + providerName + ":" + value), true
+		}
+	}
+	keys := make([]string, 0, len(providerIDs))
+	for providerName := range normalized {
+		keys = append(keys, providerName)
+	}
+	sort.Strings(keys)
+	for _, providerName := range keys {
+		if value := normalized[providerName]; value != "" {
+			return idhash.IdHash(kind + ":" + providerName + ":" + value), true
+		}
+	}
+	return "", false
+}
+
+// InventoryShowRoot returns the collection-relative show directory for an
+// inventory video path, using the same season-directory boundary as scanning.
+func InventoryShowRoot(videoPath string) string {
+	parts := strings.Split(videoPath, "/")
+	for index := len(parts) - 2; index > 0; index-- {
+		if inventorySeasonDirectory.MatchString(parts[index]) {
+			return path.Join(parts[:index]...)
+		}
+	}
+	return path.Dir(videoPath)
 }
 
 func parseSubtitleSidecar(videoBase, filename string) (subtitle Subs, format string, ok bool) {

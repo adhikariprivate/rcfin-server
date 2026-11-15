@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/adhikariprivate/rcfin-server/internal/database/model"
 	"github.com/adhikariprivate/rcfin-server/internal/database/postgres"
@@ -19,6 +20,7 @@ type Repository interface {
 	PlaylistRepo
 	PersonRepo
 	ImageRepo
+	MediaOperationRepo
 	StartBackgroundJobs(ctx context.Context)
 	Close() error
 }
@@ -103,6 +105,16 @@ type ImageRepo interface {
 	StoreImage(ctx context.Context, itemID, imageType string, metadata model.ImageMetadata, data []byte) error
 	// DeleteImage deletes an image for the given itemID and type
 	DeleteImage(ctx context.Context, itemID, imageType string) error
+}
+
+type MediaOperationRepo interface {
+	CreateMediaOperation(context.Context, *model.MediaOperation) (bool, error)
+	UpsertMediaOperation(context.Context, *model.MediaOperation) error
+	GetMediaOperation(context.Context, string, string, string) (*model.MediaOperation, error)
+	ListMediaOperations(context.Context, string, int) ([]model.MediaOperation, error)
+	ListMediaOperationsPage(context.Context, string, int, time.Time, string) ([]model.MediaOperation, error)
+	ClaimMediaOperation(context.Context, string, string, time.Time, time.Time) (bool, error)
+	RenewMediaOperationLease(context.Context, string, string, time.Time, time.Time) (bool, error)
 }
 
 // New creates a new database repository based on the type and options provided.
