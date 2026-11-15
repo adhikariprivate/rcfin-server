@@ -209,6 +209,17 @@ quota exhaustion are scheduled for retry after 24 hours instead of consuming
 the ordinary transient-error retry budget. The operation journal stores
 planned and completed organization operations in SQLite or PostgreSQL and
 reconciles source/destination state before retrying after interruption.
+
+At startup, RCFin optionally loads `.env` from its working directory. Set
+`RCFIN_ENV_FILE` to use a different dotenv path. Variables already present in
+the process environment take precedence. For the provider credentials shown
+in `rcfin.example.yaml`, RCFin accepts either the configured `RCFIN_*` names
+or these common unprefixed names: `TMDB_READ_ACCESS_TOKEN` (preferred) or
+`TMDB_API_KEY`, `OPENSUBTITLES_API_KEY`, `OPENSUBTITLES_USERNAME`, and
+`OPENSUBTITLES_PASSWORD`. The unprefixed variables are mapped to their
+`RCFIN_*` counterparts at startup; an explicitly supplied `RCFIN_*` value
+wins. Keep `.env` out of version control and restrict its file permissions.
+
 TMDb movie certifications and TV content ratings are selected for the country
 region in the configured metadata language. The localized title is used as the
 initial sort title; existing local sort titles remain protected by the normal

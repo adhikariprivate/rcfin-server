@@ -411,6 +411,10 @@ func validateNamingTemplate(format string, allowed ...string) error {
 }
 
 func main() {
+	if err := initializeEnvironment(); err != nil {
+		log.Printf("initialize environment: %v", err)
+		os.Exit(1)
+	}
 	if args, configPath, ok := managementCommand(os.Args[1:]); ok {
 		if err := runManagementCommand(configPath, args); err != nil {
 			log.Printf("%v", err)
