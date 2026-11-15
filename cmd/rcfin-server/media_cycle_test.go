@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/adhikariprivate/rcfin-server/internal/collection"
 	"github.com/adhikariprivate/rcfin-server/internal/database/model"
 	"github.com/adhikariprivate/rcfin-server/internal/database/sqlite"
+	"github.com/adhikariprivate/rcfin-server/internal/rclonestore"
 )
 
 func TestConfirmedFolderMoveRelinksCompletedMetadataOperation(t *testing.T) {
@@ -153,6 +155,37 @@ func TestPendingMediaPathsAreStageScoped(t *testing.T) {
 	}
 	if len(subtitlePaths) != 1 || subtitlePaths[0] != "Film/two.mkv" {
 		t.Fatalf("pending subtitle paths = %v", subtitlePaths)
+	}
+}
+
+func TestWrittenSidecarIsMergedIntoCurrentInventory(t *testing.T) {
+	root := t.TempDir()
+	movieDir := filepath.Join(root, "Film")
+	if err := os.MkdirAll(movieDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(movieDir, "movie.nfo"), []byte("<movie />"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	storage, err := rclonestore.New(context.Background(), root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+	coll := &collection.Collection{ID: "movies", Storage: storage}
+	inventory := []collection.InventoryEntry{{Path: "Film/Movie.mkv", Scope: collection.InventoryScopeLibrary, Role: collection.InventoryVideo}}
+	merged := mergeWrittenSidecarInventory(coll, inventory, "Film/Movie.mkv", "Film/movie.nfo")
+	if len(merged) != 2 {
+		t.Fatalf("merged inventory length = %d, want 2", len(merged))
+	}
+	var found bool
+	for _, entry := range merged {
+		if entry.Path == "Film/movie.nfo" {
+			found = entry.Scope == collection.InventoryScopeLibrary && entry.Role == collection.InventoryNFO && entry.Size > 0
+		}
+	}
+	if !found {
+		t.Fatalf("written NFO sidecar was not merged into the inventory: %#v", merged)
 	}
 }
 

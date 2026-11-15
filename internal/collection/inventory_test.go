@@ -196,6 +196,66 @@ func TestCollectionItemIDSurvivesConfirmedFolderRename(t *testing.T) {
 	}
 }
 
+func TestRefreshCollectionWithInventoryPersistsNewSidecarsWithoutRelisting(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	movieDir := filepath.Join(root, "Film")
+	if err := os.MkdirAll(movieDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(movieDir, "Film.mkv"), []byte("video fixture"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := sqlite.New(&sqlite.ConfigFile{Filename: filepath.Join(t.TempDir(), "inventory.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	storage, err := rclonestore.New(ctx, root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+	collections := New(&Options{Repo: repo})
+	collections.AddCollectionWithInbox("Movies", "movies", "movies", root, storage, ".Inbox")
+	coll := collections.GetCollection("movies")
+	inventory, err := InventoryLibrary(ctx, coll, coll.InboxPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReconcileLibraryInventory(ctx, repo, "movies", inventory, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := collections.RefreshCollectionWithInventory(ctx, "movies", inventory); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(movieDir, "movie.nfo"), []byte(`<movie><uniqueid type="tmdb" default="true">12345</uniqueid></movie>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	storage.FlushDirCache()
+	info, err := storage.Stat("Film/movie.nfo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory = append(inventory, InventoryEntry{Path: "Film/movie.nfo", Scope: InventoryScopeLibrary, Role: InventoryNFO, Size: info.Size(), ModTime: info.ModTime().UnixNano()})
+	if err := collections.RefreshCollectionWithInventory(ctx, "movies", inventory); err != nil {
+		t.Fatal(err)
+	}
+	if len(coll.Items) != 1 || coll.Items[0].(*Movie).Metadata.ProviderIDs()["tmdb"] != "12345" {
+		t.Fatalf("new NFO was not loaded into the current model: %#v", coll.Items)
+	}
+	snapshot, err := repo.GetLibraryInventory(ctx, "movies")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry := snapshotEntryByPath(snapshot, "Film/movie.nfo"); entry.Path == "" || entry.Role != string(InventoryNFO) {
+		t.Fatalf("new sidecar was not added to the durable snapshot: %#v", snapshot.Entries)
+	}
+	if snapshotEntryByPath(snapshot, "Film").TreeFingerprint == "" {
+		t.Fatal("parent subtree fingerprint was not updated after sidecar write")
+	}
+}
+
 func snapshotEntryByPath(snapshot *model.LibraryInventorySnapshot, itemPath string) model.LibraryInventoryEntry {
 	if snapshot != nil {
 		for _, entry := range snapshot.Entries {

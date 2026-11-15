@@ -284,10 +284,11 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 
 	var metadataReport metadatarefresh.Report
 	metadataReport.CollectionID = library.ID
+	refreshCollectionAfterSidecars := false
 	if metadataEnabled && tmdb != nil {
 		if len(metadataLibraryPaths) > 0 {
 			var stageReport metadatarefresh.Report
-			stageReport, err = runMetadataForPaths(ctx, collections, db, coll, library, inventory, metadataLibraryPaths, false, tmdb)
+			stageReport, err = runMetadataForPaths(ctx, db, coll, library, inventory, metadataLibraryPaths, false, tmdb)
 			metadataReport.Items = append(metadataReport.Items, stageReport.Items...)
 			if err != nil {
 				log.Printf("metadata refresh for collection %q failed: %v", library.ID, err)
@@ -295,7 +296,7 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 		}
 		if len(inboxPaths) > 0 {
 			var stageReport metadatarefresh.Report
-			stageReport, err = runMetadataForPaths(ctx, collections, db, coll, library, inventory, inboxPaths, true, tmdb)
+			stageReport, err = runMetadataForPaths(ctx, db, coll, library, inventory, inboxPaths, true, tmdb)
 			metadataReport.Items = append(metadataReport.Items, stageReport.Items...)
 			if err != nil {
 				log.Printf("Inbox metadata refresh for collection %q failed: %v", library.ID, err)
@@ -303,13 +304,16 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 		}
 		if len(metadataReport.Items) > 0 {
 			mergeMetadataIDs(inventory, metadataReport, coll.Type)
-			encoded, _ := json.Marshal(metadataReport)
-			log.Printf("metadata refresh report: %s", encoded)
-			if metadataReportMayHaveChangedStorage(metadataReport) {
-				if err := collections.RefreshCollectionWithInventory(ctx, library.ID, inventory); err != nil {
-					log.Printf("collection refresh after metadata for %q failed: %v", library.ID, err)
+			for _, item := range metadataReport.Items {
+				for _, file := range item.Files {
+					if file.State == "written" {
+						inventory = mergeWrittenSidecarInventory(coll, inventory, item.Source, file.Destination)
+					}
 				}
 			}
+			refreshCollectionAfterSidecars = refreshCollectionAfterSidecars || metadataReportMayHaveChangedStorage(metadataReport)
+			encoded, _ := json.Marshal(metadataReport)
+			log.Printf("metadata refresh report: %s", encoded)
 		}
 	} else if metadataEnabled && hasEligiblePaths(metadataLibraryPaths, inboxPaths) {
 		retryAt := time.Now().Add(scanInterval)
@@ -346,7 +350,10 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 				client.SetMaxDownloadBytes(subtitlePolicy.MaxDownloadBytes)
 			}
 			if len(subtitleLibraryPaths) > 0 {
-				if report, runErr := runSubtitlesForPaths(ctx, collections, db, coll, library, inventory, subtitleLibraryPaths, false, client); runErr != nil {
+				report, runErr := runSubtitlesForPaths(ctx, db, coll, library, inventory, subtitleLibraryPaths, false, client)
+				inventory = mergeWrittenSubtitleInventory(coll, inventory, report)
+				refreshCollectionAfterSidecars = refreshCollectionAfterSidecars || subtitleReportMayHaveChangedStorage(report)
+				if runErr != nil {
 					log.Printf("subtitle refresh for collection %q failed: %v", library.ID, runErr)
 				} else {
 					encoded, _ := json.Marshal(report)
@@ -354,7 +361,10 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 				}
 			}
 			if len(inboxPaths) > 0 {
-				if report, runErr := runSubtitlesForPaths(ctx, collections, db, coll, library, inventory, inboxPaths, true, client); runErr != nil {
+				report, runErr := runSubtitlesForPaths(ctx, db, coll, library, inventory, inboxPaths, true, client)
+				inventory = mergeWrittenSubtitleInventory(coll, inventory, report)
+				refreshCollectionAfterSidecars = refreshCollectionAfterSidecars || subtitleReportMayHaveChangedStorage(report)
+				if runErr != nil {
 					log.Printf("Inbox subtitle refresh for collection %q failed: %v", library.ID, runErr)
 				} else {
 					encoded, _ := json.Marshal(report)
@@ -363,10 +373,15 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 			}
 		}
 	}
+	if refreshCollectionAfterSidecars {
+		if err := collections.RefreshCollectionWithInventory(ctx, library.ID, inventory); err != nil {
+			log.Printf("collection refresh after sidecar writes for %q failed: %v", library.ID, err)
+		}
+	}
 	return nil
 }
 
-func runMetadataForPaths(ctx context.Context, collections *collection.CollectionRepo, db database.Repository, coll *collection.Collection, library collectionConfig, inventory []collection.InventoryEntry, paths []string, inboxOnly bool, client *provider.TMDb) (metadatarefresh.Report, error) {
+func runMetadataForPaths(ctx context.Context, db database.Repository, coll *collection.Collection, library collectionConfig, inventory []collection.InventoryEntry, paths []string, inboxOnly bool, client *provider.TMDb) (metadatarefresh.Report, error) {
 	policy := library.Media.Metadata
 	var report metadatarefresh.Report
 	err := perLibraryMediaJobs.run(ctx, library.ID, library.Media.MaxParallelJobs, func() error {
@@ -384,15 +399,10 @@ func runMetadataForPaths(ctx context.Context, collections *collection.Collection
 		})
 		return runErr
 	})
-	if err == nil && metadataReportMayHaveChangedStorage(report) {
-		if refreshErr := collections.RefreshCollectionWithInventory(ctx, library.ID, inventory); refreshErr != nil {
-			log.Printf("collection refresh after metadata for %q failed: %v", library.ID, refreshErr)
-		}
-	}
 	return report, err
 }
 
-func runSubtitlesForPaths(ctx context.Context, collections *collection.CollectionRepo, db database.Repository, coll *collection.Collection, library collectionConfig, inventory []collection.InventoryEntry, paths []string, inboxOnly bool, client *subtitles.OpenSubtitles) (subtitles.SubtitleReport, error) {
+func runSubtitlesForPaths(ctx context.Context, db database.Repository, coll *collection.Collection, library collectionConfig, inventory []collection.InventoryEntry, paths []string, inboxOnly bool, client *subtitles.OpenSubtitles) (subtitles.SubtitleReport, error) {
 	policy := library.Media.Subtitles
 	var report subtitles.SubtitleReport
 	err := perLibraryMediaJobs.run(ctx, library.ID, library.Media.MaxParallelJobs, func() error {
@@ -406,11 +416,6 @@ func runSubtitlesForPaths(ctx context.Context, collections *collection.Collectio
 		})
 		return runErr
 	})
-	if err == nil && subtitleReportMayHaveChangedStorage(report) {
-		if refreshErr := collections.RefreshCollectionWithInventory(ctx, library.ID, inventory); refreshErr != nil {
-			log.Printf("collection refresh after subtitles for %q failed: %v", library.ID, refreshErr)
-		}
-	}
 	return report, err
 }
 
@@ -443,6 +448,50 @@ func stageWorkPaths(changed, pending []string, inventory []collection.InventoryE
 		paths = appendUniquePaths(paths, allVideoPaths(inventory, scope)...)
 	}
 	return paths
+}
+
+func mergeWrittenSidecarInventory(coll *collection.Collection, inventory []collection.InventoryEntry, source, destination string) []collection.InventoryEntry {
+	if coll == nil || coll.Storage == nil || destination == "" {
+		return inventory
+	}
+	scope := entryScopeAtPath(inventory, source)
+	if scope == "" {
+		return inventory
+	}
+	info, err := coll.Storage.Stat(destination)
+	if err != nil || info.IsDir() {
+		return inventory
+	}
+	extension := strings.ToLower(path.Ext(destination))
+	role := collection.InventoryOther
+	switch extension {
+	case ".nfo":
+		role = collection.InventoryNFO
+	case ".jpg", ".jpeg", ".png", ".tbn", ".webp":
+		role = collection.InventoryArtwork
+	case ".srt", ".vtt", ".ass", ".ssa", ".sub":
+		role = collection.InventorySubtitle
+	}
+	entry := collection.InventoryEntry{
+		Path: destination, Scope: scope, Size: info.Size(), ModTime: info.ModTime().UnixNano(),
+		Role: role, Extension: strings.TrimPrefix(extension, "."),
+	}
+	for i := range inventory {
+		if inventory[i].Path == destination {
+			inventory[i] = entry
+			return inventory
+		}
+	}
+	return append(inventory, entry)
+}
+
+func mergeWrittenSubtitleInventory(coll *collection.Collection, inventory []collection.InventoryEntry, report subtitles.SubtitleReport) []collection.InventoryEntry {
+	for _, action := range report.Actions {
+		if action.State == "written" {
+			inventory = mergeWrittenSidecarInventory(coll, inventory, action.Source, action.Destination)
+		}
+	}
+	return inventory
 }
 
 func pendingMediaPaths(ctx context.Context, db database.Repository, libraryID string, inventory []collection.InventoryEntry, scope, stage string) ([]string, error) {

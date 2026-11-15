@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -214,14 +215,14 @@ func (cr *CollectionRepo) RefreshCollectionWithInventory(ctx context.Context, co
 		return err
 	}
 	if snapshot != nil {
-		if err := cr.persistCatalogItemIDs(ctx, snapshot, c.Items); err != nil {
+		if err := cr.persistCatalogModelState(ctx, snapshot, c.Items, inventory); err != nil {
 			return fmt.Errorf("persist stable Jellyfin item IDs: %w", err)
 		}
 	}
 	return cr.BuildSearchIndex(ctx)
 }
 
-func (cr *CollectionRepo) persistCatalogItemIDs(ctx context.Context, snapshot *model.LibraryInventorySnapshot, items []Item) error {
+func (cr *CollectionRepo) persistCatalogModelState(ctx context.Context, snapshot *model.LibraryInventorySnapshot, items []Item, inventory []InventoryEntry) error {
 	if cr.repo == nil || snapshot == nil {
 		return nil
 	}
@@ -233,18 +234,64 @@ func (cr *CollectionRepo) persistCatalogItemIDs(ctx context.Context, snapshot *m
 		itemIDs[item.Path()] = stableItemIdentity{ID: item.ID(), ProviderID: itemProviderID(item)}
 	}
 	changed := false
+	entriesByPath := make(map[string]int, len(snapshot.Entries))
+	oldTreeFingerprints := make(map[string]string, len(snapshot.Entries))
 	for i := range snapshot.Entries {
-		entry := &snapshot.Entries[i]
-		identity, exists := itemIDs[entry.Path]
-		if !exists || entry.Scope != InventoryScopeLibrary || !entry.IsDir {
+		entriesByPath[snapshot.Entries[i].Path] = i
+		oldTreeFingerprints[snapshot.Entries[i].Path] = snapshot.Entries[i].TreeFingerprint
+	}
+	for _, observed := range inventory {
+		entry := persistedInventoryEntry(observed)
+		if index, exists := entriesByPath[entry.Path]; exists {
+			prior := snapshot.Entries[index]
+			if prior.Classification == string(InventoryMoved) && prior.Identity != "" && !strings.Contains(entry.Identity, "=") {
+				entry.Identity = prior.Identity
+			}
+			entry.FirstSeenGeneration = prior.FirstSeenGeneration
+			entry.LastSeenGeneration = prior.LastSeenGeneration
+			entry.Classification = prior.Classification
+			entry.PreviousPath = prior.PreviousPath
+			entry.JellyfinID = prior.JellyfinID
+			entry.JellyfinProviderID = prior.JellyfinProviderID
+			entry.MissingSince = prior.MissingSince
+			entry.MoveRelinkPending = prior.MoveRelinkPending
+			if entry.FirstSeenGeneration == 0 {
+				entry.FirstSeenGeneration = snapshot.Generation
+			}
+			if entry.LastSeenGeneration == 0 {
+				entry.LastSeenGeneration = snapshot.Generation
+			}
+			if !reflect.DeepEqual(prior, entry) {
+				changed = true
+			}
+			snapshot.Entries[index] = entry
+		} else {
+			entry.FirstSeenGeneration = snapshot.Generation
+			entry.LastSeenGeneration = snapshot.Generation
+			entry.Classification = string(InventoryBaseline)
+			snapshot.Entries = append(snapshot.Entries, entry)
+			entriesByPath[entry.Path] = len(snapshot.Entries) - 1
+			changed = true
+		}
+	}
+	for itemPath, identity := range itemIDs {
+		index, exists := entriesByPath[itemPath]
+		if !exists || snapshot.Entries[index].Scope != InventoryScopeLibrary || !snapshot.Entries[index].IsDir {
 			continue
 		}
+		entry := &snapshot.Entries[index]
 		if entry.JellyfinID != identity.ID {
 			entry.JellyfinID = identity.ID
 			changed = true
 		}
 		if identity.ProviderID != "" && entry.JellyfinProviderID != identity.ProviderID {
 			entry.JellyfinProviderID = identity.ProviderID
+			changed = true
+		}
+	}
+	populateTreeFingerprints(snapshot.Entries)
+	for _, entry := range snapshot.Entries {
+		if oldTreeFingerprints[entry.Path] != entry.TreeFingerprint {
 			changed = true
 		}
 	}
