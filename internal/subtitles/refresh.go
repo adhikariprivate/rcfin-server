@@ -273,8 +273,11 @@ func subtitleJobSignature(video collection.InventoryEntry, language string, opts
 	data, _ := json.Marshal(struct {
 		Path          string
 		Size, ModTime int64
+		Title         string
+		Year          int
+		ProviderIDs   map[string]string
 		Config        string
-	}{video.Path, video.Size, video.ModTime, string(config)})
+	}{video.Path, video.Size, video.ModTime, video.Title, video.Year, video.ProviderIDs, string(config)})
 	hash := sha256.Sum256(data)
 	return hex.EncodeToString(hash[:])
 }

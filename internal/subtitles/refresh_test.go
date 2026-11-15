@@ -114,3 +114,37 @@ func TestOpenSubtitlesSearchAcceptsNumericProviderIDs(t *testing.T) {
 		t.Fatalf("parsed candidates = %#v", rows)
 	}
 }
+
+func TestSubtitleJobSignatureChangesWhenProviderIdentityChanges(t *testing.T) {
+	video := collection.InventoryEntry{
+		Path: "Musk (2026)/Musk (2026).mp4", Size: 1234, ModTime: 5678,
+		Title: "Musk", Year: 2026,
+	}
+	opts := RefreshOptions{Languages: []string{"en"}, Formats: []string{"srt"}, MinimumConfidence: 0.84}
+	withoutID := subtitleJobSignature(video, "en", opts)
+	video.ProviderIDs = map[string]string{"tmdb": "1096228"}
+	withID := subtitleJobSignature(video, "en", opts)
+	if withoutID == withID {
+		t.Fatal("subtitle job signature did not change when movie.nfo supplied a TMDb ID")
+	}
+}
+
+func TestRankSubtitleScoresMatchingProviderIDWithoutHash(t *testing.T) {
+	q := queryContext{
+		SearchQuery: SearchQuery{Title: "Musk", Year: 2026, Language: "en"},
+		Title:       "Musk", Year: 2026, TMDbID: "1096228",
+	}
+	candidate := Candidate{
+		ID: "candidate", Language: "en", Title: "Musk", Year: 2026,
+		TMDbID: "1096228", Format: "srt", MovieHashMatch: false,
+	}
+	selected, confidence, reason, ok := rankSubtitle(q, []Candidate{candidate}, RefreshOptions{
+		Formats: []string{"srt"}, MinimumConfidence: 0.84,
+	})
+	if !ok {
+		t.Fatalf("rankSubtitle() rejected provider-ID match: confidence=%.2f reason=%q", confidence, reason)
+	}
+	if selected.ID != candidate.ID || confidence < 0.95 {
+		t.Fatalf("selected=%q confidence=%.2f, want candidate with >=0.95 confidence", selected.ID, confidence)
+	}
+}
