@@ -189,6 +189,46 @@ func TestWrittenSidecarIsMergedIntoCurrentInventory(t *testing.T) {
 	}
 }
 
+func TestAdminScanPreservesUnprocessedStageConfigurationChanges(t *testing.T) {
+	repo, err := sqlite.New(&sqlite.ConfigFile{Filename: filepath.Join(t.TempDir(), "media.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	ctx := context.Background()
+	if err := repo.SaveLibraryInventory(ctx, &model.LibraryInventorySnapshot{
+		CollectionID: "movies", CompletedAt: time.Now().UTC(), ServerVersion: "1.0",
+		ConfigurationSignatures: map[string]string{"metadata": "meta-old", "subtitles": "subs-old"},
+		Entries:                 []model.LibraryInventoryEntry{{Path: "Film/movie.mkv", Scope: collection.InventoryScopeLibrary, Role: string(collection.InventoryVideo), Size: 10, ModTime: 20}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	versions := collection.InventoryProcessingVersions{
+		ServerVersion: "1.0", ConfigurationSignatures: map[string]string{"metadata": "meta-new", "subtitles": "subs-new"},
+	}
+	result, err := reconcileAdminInventory(ctx, repo, "movies", []collection.InventoryEntry{{
+		Path: "Film/movie.mkv", Scope: collection.InventoryScopeLibrary, Role: collection.InventoryVideo, Size: 10, ModTime: 20,
+	}}, versions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.ConfigurationChanges) != 0 {
+		t.Fatalf("scan-only reconciliation consumed or reported stage config changes: %v", result.ConfigurationChanges)
+	}
+	if err := updateLibraryStageState(ctx, repo, "movies", versions, "metadata"); err != nil {
+		t.Fatal(err)
+	}
+	result, err = collection.ReconcileLibraryInventory(ctx, repo, "movies", []collection.InventoryEntry{{
+		Path: "Film/movie.mkv", Scope: collection.InventoryScopeLibrary, Role: collection.InventoryVideo, Size: 10, ModTime: 20,
+	}}, time.Now().UTC(), versions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.ConfigurationChanges) != 1 || result.ConfigurationChanges[0] != "subtitles" {
+		t.Fatalf("explicit metadata refresh acknowledged wrong stages: %v", result.ConfigurationChanges)
+	}
+}
+
 func TestLibraryRetryFindsAndRequeuesOperationByJobID(t *testing.T) {
 	repo, err := sqlite.New(&sqlite.ConfigFile{Filename: filepath.Join(t.TempDir(), "media.db")})
 	if err != nil {

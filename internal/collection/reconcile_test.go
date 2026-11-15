@@ -363,6 +363,16 @@ func TestReconcileLibraryInventoryOnlyInvalidatesWhenBuildAndAlgorithmBothChange
 	if len(result.AlgorithmChanges) != 1 || result.AlgorithmChanges[0] != "metadata" {
 		t.Fatalf("algorithm change invalidation = %#v, want metadata", result.AlgorithmChanges)
 	}
+	if repo.snapshot.ServerVersion != "1.1+new" || repo.snapshot.AlgorithmVersions["metadata"] != 2 {
+		t.Fatalf("algorithm invalidation was consumed before processing: %#v", repo.snapshot)
+	}
+	result, err = ReconcileLibraryInventory(context.Background(), repo, "movies", []InventoryEntry{{Path: "Film/movie.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo}}, time.Unix(400, 0), versions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.AlgorithmChanges) != 1 || result.AlgorithmChanges[0] != "metadata" {
+		t.Fatalf("unacknowledged algorithm invalidation was not retried: %#v", result.AlgorithmChanges)
+	}
 }
 
 func TestAdoptInventoryDirectoryMoveCarriesVerifiedSubtree(t *testing.T) {
@@ -409,6 +419,40 @@ func TestReconcileLibraryInventoryRetainsMissingTombstoneAndClearsOnReappearance
 	}
 	if len(result.Changes) != 1 || result.Changes[0].Kind != InventoryChanged || repo.snapshot.Entries[0].MissingSince != nil {
 		t.Fatalf("reappeared object was not revived cleanly: %#v %#v", result.Changes, repo.snapshot.Entries)
+	}
+}
+
+func TestReconcileDetectsOnlyChangedStageConfiguration(t *testing.T) {
+	repo := &memoryInventoryRepo{snapshot: &model.LibraryInventorySnapshot{
+		Generation: 3, ServerVersion: "1.0+same",
+		AlgorithmVersions:       map[string]int{"metadata": 2, "subtitles": 4},
+		ConfigurationSignatures: map[string]string{"metadata": "metadata-old", "subtitles": "subtitles-same"},
+		Entries:                 []model.LibraryInventoryEntry{{Path: "Film/movie.mkv", Scope: InventoryScopeLibrary, Role: string(InventoryVideo), Size: 100, ModTime: 20}},
+	}}
+	versions := InventoryProcessingVersions{
+		ServerVersion: "1.0+same", AlgorithmVersions: map[string]int{"metadata": 2, "subtitles": 4},
+		ConfigurationSignatures: map[string]string{"metadata": "metadata-new", "subtitles": "subtitles-same"},
+	}
+	result, err := ReconcileLibraryInventory(context.Background(), repo, "movies", []InventoryEntry{{
+		Path: "Film/movie.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, Size: 100, ModTime: 20,
+	}}, time.Unix(400, 0), versions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.ConfigurationChanges) != 1 || result.ConfigurationChanges[0] != "metadata" || len(result.AlgorithmChanges) != 0 {
+		t.Fatalf("stage config invalidation = config %v / algorithms %v, want metadata only", result.ConfigurationChanges, result.AlgorithmChanges)
+	}
+	if repo.snapshot.ConfigurationSignatures["metadata"] != "metadata-old" {
+		t.Fatalf("new config signature was persisted before stage success: %#v", repo.snapshot.ConfigurationSignatures)
+	}
+	result, err = ReconcileLibraryInventory(context.Background(), repo, "movies", []InventoryEntry{{
+		Path: "Film/movie.mkv", Scope: InventoryScopeLibrary, Role: InventoryVideo, Size: 100, ModTime: 20,
+	}}, time.Unix(500, 0), versions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.ConfigurationChanges) != 1 || result.ConfigurationChanges[0] != "metadata" {
+		t.Fatalf("unacknowledged config change was not retried: %v", result.ConfigurationChanges)
 	}
 }
 

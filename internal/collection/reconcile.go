@@ -36,19 +36,21 @@ type InventoryChange struct {
 }
 
 type InventoryReconciliation struct {
-	Generation         int64             `json:"generation"`
-	Completed          time.Time         `json:"completed_at"`
-	ListingMode        string            `json:"listing_mode,omitempty"`
-	BackendIDsObserved int               `json:"backend_ids_observed,omitempty"`
-	Changes            []InventoryChange `json:"changes"`
-	AlgorithmChanges   []string          `json:"algorithm_changes,omitempty"`
+	Generation           int64             `json:"generation"`
+	Completed            time.Time         `json:"completed_at"`
+	ListingMode          string            `json:"listing_mode,omitempty"`
+	BackendIDsObserved   int               `json:"backend_ids_observed,omitempty"`
+	Changes              []InventoryChange `json:"changes"`
+	AlgorithmChanges     []string          `json:"algorithm_changes,omitempty"`
+	ConfigurationChanges []string          `json:"configuration_changes,omitempty"`
 }
 
 type InventoryProcessingVersions struct {
-	ServerVersion     string
-	AlgorithmVersions map[string]int
-	MissingGrace      time.Duration
-	ListingMode       string
+	ServerVersion           string
+	AlgorithmVersions       map[string]int
+	ConfigurationSignatures map[string]string
+	MissingGrace            time.Duration
+	ListingMode             string
 }
 
 // ReconcileLibraryInventory persists a complete inventory only after the
@@ -122,6 +124,7 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 		missingGrace = defaultInventoryMissingGrace
 	}
 	var algorithmChanges []string
+	var configurationChanges []string
 	if previous != nil && previous.ServerVersion != "" && previous.ServerVersion != processingVersions.ServerVersion {
 		for stage, currentVersion := range processingVersions.AlgorithmVersions {
 			if currentVersion != 0 && previous.AlgorithmVersions[stage] != 0 && previous.AlgorithmVersions[stage] != currentVersion {
@@ -130,6 +133,17 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 		}
 	}
 	sort.Strings(algorithmChanges)
+	if previous != nil {
+		for stage, currentSignature := range processingVersions.ConfigurationSignatures {
+			if currentSignature == "" {
+				continue
+			}
+			if previousSignature := previous.ConfigurationSignatures[stage]; previousSignature != "" && previousSignature != currentSignature {
+				configurationChanges = append(configurationChanges, stage)
+			}
+		}
+	}
+	sort.Strings(configurationChanges)
 	newByPath := map[string]model.LibraryInventoryEntry{}
 	for _, entry := range current {
 		newByPath[entry.Path] = entry
@@ -359,11 +373,68 @@ func ReconcileLibraryInventory(ctx context.Context, repo database.LibraryInvento
 	}
 	changes = uniqueChanges
 
-	snapshot := &model.LibraryInventorySnapshot{CollectionID: collectionID, CompletedAt: completed.UTC(), ServerVersion: processingVersions.ServerVersion, AlgorithmVersions: processingVersions.AlgorithmVersions, ListingMode: processingVersions.ListingMode, BackendIDsObserved: backendIDsObserved, Entries: current}
+	// Keep invalidations pending until the corresponding worker acknowledges
+	// success. A scan can complete even when provider work is unavailable or
+	// fails; persisting the new versions here would silently lose that work.
+	storedAlgorithms := cloneIntMap(processingVersions.AlgorithmVersions)
+	storedSignatures := cloneStringMap(processingVersions.ConfigurationSignatures)
+	storedServerVersion := processingVersions.ServerVersion
+	if previous != nil {
+		storedAlgorithms = cloneIntMap(previous.AlgorithmVersions)
+		if storedAlgorithms == nil {
+			storedAlgorithms = map[string]int{}
+		}
+		for stage, currentVersion := range processingVersions.AlgorithmVersions {
+			if !containsStringValue(algorithmChanges, stage) {
+				storedAlgorithms[stage] = currentVersion
+			}
+		}
+		storedSignatures = cloneStringMap(processingVersions.ConfigurationSignatures)
+		for stage := range processingVersions.ConfigurationSignatures {
+			if containsStringValue(configurationChanges, stage) {
+				storedSignatures[stage] = previous.ConfigurationSignatures[stage]
+			}
+		}
+		if len(algorithmChanges) > 0 {
+			storedServerVersion = previous.ServerVersion
+		}
+	}
+	snapshot := &model.LibraryInventorySnapshot{CollectionID: collectionID, CompletedAt: completed.UTC(), ServerVersion: storedServerVersion, AlgorithmVersions: storedAlgorithms, ConfigurationSignatures: storedSignatures, ListingMode: processingVersions.ListingMode, BackendIDsObserved: backendIDsObserved, Entries: current}
 	if err := repo.SaveLibraryInventory(ctx, snapshot); err != nil {
 		return InventoryReconciliation{}, fmt.Errorf("save completed inventory: %w", err)
 	}
-	return InventoryReconciliation{Generation: snapshot.Generation, Completed: snapshot.CompletedAt, ListingMode: snapshot.ListingMode, BackendIDsObserved: snapshot.BackendIDsObserved, Changes: changes, AlgorithmChanges: algorithmChanges}, nil
+	return InventoryReconciliation{Generation: snapshot.Generation, Completed: snapshot.CompletedAt, ListingMode: snapshot.ListingMode, BackendIDsObserved: snapshot.BackendIDsObserved, Changes: changes, AlgorithmChanges: algorithmChanges, ConfigurationChanges: configurationChanges}, nil
+}
+
+func containsStringValue(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func cloneIntMap(source map[string]int) map[string]int {
+	if source == nil {
+		return nil
+	}
+	clone := make(map[string]int, len(source))
+	for key, value := range source {
+		clone[key] = value
+	}
+	return clone
+}
+
+func cloneStringMap(source map[string]string) map[string]string {
+	if source == nil {
+		return nil
+	}
+	clone := make(map[string]string, len(source))
+	for key, value := range source {
+		clone[key] = value
+	}
+	return clone
 }
 
 func inventoryEntryWasMissing(entry model.LibraryInventoryEntry) bool {

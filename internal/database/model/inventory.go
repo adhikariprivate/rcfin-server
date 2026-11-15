@@ -28,12 +28,13 @@ type LibraryInventoryEntry struct {
 // LibraryInventorySnapshot is the last fully completed inventory generation.
 // The repository increments Generation atomically when it stores a snapshot.
 type LibraryInventorySnapshot struct {
-	CollectionID       string                  `json:"collection_id"`
-	Generation         int64                   `json:"generation"`
-	CompletedAt        time.Time               `json:"completed_at"`
-	ServerVersion      string                  `json:"server_version,omitempty"`
-	AlgorithmVersions  map[string]int          `json:"algorithm_versions,omitempty"`
-	ListingMode        string                  `json:"listing_mode,omitempty"`
-	BackendIDsObserved int                     `json:"backend_ids_observed,omitempty"`
-	Entries            []LibraryInventoryEntry `json:"entries"`
+	CollectionID            string                  `json:"collection_id"`
+	Generation              int64                   `json:"generation"`
+	CompletedAt             time.Time               `json:"completed_at"`
+	ServerVersion           string                  `json:"server_version,omitempty"`
+	AlgorithmVersions       map[string]int          `json:"algorithm_versions,omitempty"`
+	ConfigurationSignatures map[string]string       `json:"configuration_signatures,omitempty"`
+	ListingMode             string                  `json:"listing_mode,omitempty"`
+	BackendIDsObserved      int                     `json:"backend_ids_observed,omitempty"`
+	Entries                 []LibraryInventoryEntry `json:"entries"`
 }

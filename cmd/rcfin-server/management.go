@@ -153,7 +153,7 @@ func runLibraryItemCommand(ctx context.Context, repo database.Repository, config
 	if err != nil {
 		return fmt.Errorf("inventory library: %w", err)
 	}
-	if _, err := collection.ReconcileLibraryInventory(ctx, repo, libraryID, inventory, time.Now().UTC(), inventoryVersionsForLibrary(*selected, storage)); err != nil {
+	if _, err := reconcileAdminInventory(ctx, repo, libraryID, inventory, inventoryVersionsForLibrary(*selected, storage)); err != nil {
 		return fmt.Errorf("reconcile before move adoption: %w", err)
 	}
 	snapshot, err := repo.GetLibraryInventory(ctx, libraryID)
@@ -531,7 +531,8 @@ func runLibraryRefreshCommand(ctx context.Context, repo database.Repository, con
 	if err != nil {
 		return fmt.Errorf("inventory library: %w", err)
 	}
-	reconciliation, err := collection.ReconcileLibraryInventory(ctx, repo, libraryID, inventory, time.Now().UTC(), inventoryVersionsForLibrary(*selected, storage))
+	processingVersions := inventoryVersionsForLibrary(*selected, storage)
+	reconciliation, err := reconcileAdminInventory(ctx, repo, libraryID, inventory, processingVersions)
 	if err != nil {
 		return fmt.Errorf("save inventory snapshot: %w", err)
 	}
@@ -570,17 +571,32 @@ func runLibraryRefreshCommand(ctx context.Context, repo database.Repository, con
 		if err != nil {
 			return fmt.Errorf("metadata refresh: %w", err)
 		}
+		if *itemPath == "" {
+			if err := updateLibraryStageState(ctx, repo, libraryID, processingVersions, "metadata"); err != nil {
+				return fmt.Errorf("acknowledge metadata configuration: %w", err)
+			}
+		}
 		return json.NewEncoder(os.Stdout).Encode(reports)
 	case "subtitles":
 		reports, err := runSubtitleRefreshStage(ctx, coll, repo, inventory, pathsByScope, selected.Media, *language, *replace)
 		if err != nil {
 			return fmt.Errorf("subtitle refresh: %w", err)
 		}
+		if *itemPath == "" {
+			if err := updateLibraryStageState(ctx, repo, libraryID, processingVersions, "subtitles"); err != nil {
+				return fmt.Errorf("acknowledge subtitle configuration: %w", err)
+			}
+		}
 		return json.NewEncoder(os.Stdout).Encode(reports)
 	case "all":
 		metadataReports, err := runMetadataRefreshStage(ctx, coll, repo, inventory, pathsByScope, selected.Media, *replaceMetadata, *replaceArtwork)
 		if err != nil {
 			return fmt.Errorf("metadata stage: %w", err)
+		}
+		if *itemPath == "" {
+			if err := updateLibraryStageState(ctx, repo, libraryID, processingVersions, "metadata"); err != nil {
+				return fmt.Errorf("acknowledge metadata configuration: %w", err)
+			}
 		}
 		var merged metadatarefresh.Report
 		merged.CollectionID = libraryID
@@ -591,6 +607,11 @@ func runLibraryRefreshCommand(ctx context.Context, repo database.Repository, con
 		subtitleReports, err := runSubtitleRefreshStage(ctx, coll, repo, inventory, pathsByScope, selected.Media, *language, *replaceSubtitles)
 		if err != nil {
 			return fmt.Errorf("subtitle stage: %w", err)
+		}
+		if *itemPath == "" {
+			if err := updateLibraryStageState(ctx, repo, libraryID, processingVersions, "subtitles"); err != nil {
+				return fmt.Errorf("acknowledge subtitle configuration: %w", err)
+			}
 		}
 		return json.NewEncoder(os.Stdout).Encode(struct {
 			Metadata  []metadatarefresh.Report   `json:"metadata"`
@@ -751,7 +772,7 @@ func runLibraryScanCommand(ctx context.Context, repo database.Repository, config
 	if err != nil {
 		return fmt.Errorf("inventory library: %w", err)
 	}
-	reconciliation, err := collection.ReconcileLibraryInventory(ctx, repo, selected.ID, entries, time.Now().UTC(), inventoryVersionsForLibrary(*selected, storage))
+	reconciliation, err := reconcileAdminInventory(ctx, repo, selected.ID, entries, inventoryVersionsForLibrary(*selected, storage))
 	if err != nil {
 		return fmt.Errorf("reconcile library inventory: %w", err)
 	}
@@ -759,6 +780,57 @@ func runLibraryScanCommand(ctx context.Context, repo database.Repository, config
 		return fmt.Errorf("relink moved media operations: %w", err)
 	}
 	return json.NewEncoder(os.Stdout).Encode(reconciliation)
+}
+
+// reconcileAdminInventory updates paths without consuming a configuration
+// change that only the background pipeline (or an explicit refresh) will
+// process. A scan or move review must not silently mark a provider stage done.
+func reconcileAdminInventory(ctx context.Context, repo database.Repository, collectionID string, inventory []collection.InventoryEntry, versions collection.InventoryProcessingVersions) (collection.InventoryReconciliation, error) {
+	previous, err := repo.GetLibraryInventory(ctx, collectionID)
+	if err != nil {
+		return collection.InventoryReconciliation{}, fmt.Errorf("load prior library configuration signatures: %w", err)
+	}
+	if previous != nil {
+		versions.ConfigurationSignatures = previous.ConfigurationSignatures
+		versions.AlgorithmVersions = previous.AlgorithmVersions
+		versions.ServerVersion = previous.ServerVersion
+	}
+	return collection.ReconcileLibraryInventory(ctx, repo, collectionID, inventory, time.Now().UTC(), versions)
+}
+
+func updateLibraryStageState(ctx context.Context, repo database.Repository, collectionID string, current collection.InventoryProcessingVersions, stages ...string) error {
+	snapshot, err := repo.GetLibraryInventory(ctx, collectionID)
+	if err != nil {
+		return err
+	}
+	if snapshot == nil {
+		return fmt.Errorf("completed inventory is required")
+	}
+	if snapshot.ConfigurationSignatures == nil {
+		snapshot.ConfigurationSignatures = map[string]string{}
+	}
+	if snapshot.AlgorithmVersions == nil {
+		snapshot.AlgorithmVersions = map[string]int{}
+	}
+	for _, stage := range stages {
+		if signature := current.ConfigurationSignatures[stage]; signature != "" {
+			snapshot.ConfigurationSignatures[stage] = signature
+		}
+		if algorithm := current.AlgorithmVersions[stage]; algorithm != 0 {
+			snapshot.AlgorithmVersions[stage] = algorithm
+		}
+	}
+	allAlgorithmsCurrent := true
+	for stage, algorithm := range current.AlgorithmVersions {
+		if snapshot.AlgorithmVersions[stage] != algorithm {
+			allAlgorithmsCurrent = false
+			break
+		}
+	}
+	if allAlgorithmsCurrent {
+		snapshot.ServerVersion = current.ServerVersion
+	}
+	return repo.UpdateLibraryInventorySnapshot(ctx, snapshot)
 }
 
 func runLibraryStatusCommand(ctx context.Context, repo database.Repository, libraries []collectionConfig, args []string) error {

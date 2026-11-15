@@ -55,8 +55,21 @@ func currentInventoryProcessingVersions() collection.InventoryProcessingVersions
 	}
 }
 
+func stageConfigurationSignature(configuration any) string {
+	encoded, err := json.Marshal(configuration)
+	if err != nil {
+		return ""
+	}
+	hash := sha256.Sum256(encoded)
+	return hex.EncodeToString(hash[:])
+}
+
 func inventoryVersionsForLibrary(library collectionConfig, storage ...*rclonestore.Library) collection.InventoryProcessingVersions {
 	versions := currentInventoryProcessingVersions()
+	versions.ConfigurationSignatures = map[string]string{
+		"metadata":  stageConfigurationSignature(library.Media.Metadata),
+		"subtitles": stageConfigurationSignature(library.Media.Subtitles),
+	}
 	if len(storage) > 0 && storage[0] != nil {
 		versions.ListingMode = storage[0].InventoryListingMode()
 	}
@@ -144,7 +157,8 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 	if err != nil {
 		return fmt.Errorf("inventory: %w", err)
 	}
-	reconciliation, err := collection.ReconcileLibraryInventory(ctx, db, library.ID, inventory, time.Now().UTC(), inventoryVersionsForLibrary(library, coll.Storage))
+	processingVersions := inventoryVersionsForLibrary(library, coll.Storage)
+	reconciliation, err := collection.ReconcileLibraryInventory(ctx, db, library.ID, inventory, time.Now().UTC(), processingVersions)
 	if err != nil {
 		return fmt.Errorf("reconcile inventory: %w", err)
 	}
@@ -162,12 +176,14 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 	metadataEnabled := metadataPolicy.Enabled && (metadataPolicy.FetchNFO || metadataPolicy.FetchArtwork)
 	subtitlesEnabled := subtitlePolicy.Enabled && len(subtitlePolicy.Languages) > 0
 	if !metadataEnabled && !subtitlesEnabled && !organizationPolicy.Enabled {
-		return nil
+		return updateLibraryStageState(ctx, db, library.ID, processingVersions, "metadata", "subtitles")
 	}
 
 	changedLibraryPaths := eligibleChangedVideoPaths(reconciliation.Changes, collection.InventoryScopeLibrary)
 	metadataAlgorithmChanged := containsString(reconciliation.AlgorithmChanges, "metadata")
 	subtitleAlgorithmChanged := containsString(reconciliation.AlgorithmChanges, "subtitles")
+	metadataConfigurationChanged := containsString(reconciliation.ConfigurationChanges, "metadata")
+	subtitleConfigurationChanged := containsString(reconciliation.ConfigurationChanges, "subtitles")
 	readyInboxPaths, err := readyInboxVideoPaths(ctx, coll, db, library, inventory)
 	if err != nil {
 		log.Printf("Inbox readiness for %q deferred: %v", library.ID, err)
@@ -180,7 +196,8 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 	if err != nil {
 		return fmt.Errorf("inspect pending subtitle work: %w", err)
 	}
-	metadataCandidates := stageWorkPaths(changedLibraryPaths, pendingMetadataPaths, inventory, collection.InventoryScopeLibrary, metadataAlgorithmChanged)
+	metadataCandidates := stageWorkPaths(changedLibraryPaths, pendingMetadataPaths, inventory, collection.InventoryScopeLibrary, metadataAlgorithmChanged || metadataConfigurationChanged)
+	metadataForced := metadataAlgorithmChanged || metadataConfigurationChanged
 	var tmdb *provider.TMDb
 	needsTMDb := organizationPolicy.Enabled || metadataEnabled && hasEligiblePaths(metadataCandidates, readyInboxPaths)
 	if needsTMDb {
@@ -261,12 +278,14 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 			changedLibraryPaths = appendUniquePaths(changedLibraryPaths, eligibleChangedVideoPaths(reconciliation.Changes, collection.InventoryScopeLibrary)...)
 			metadataAlgorithmChanged = metadataAlgorithmChanged || containsString(reconciliation.AlgorithmChanges, "metadata")
 			subtitleAlgorithmChanged = subtitleAlgorithmChanged || containsString(reconciliation.AlgorithmChanges, "subtitles")
+			metadataConfigurationChanged = metadataConfigurationChanged || containsString(reconciliation.ConfigurationChanges, "metadata")
+			subtitleConfigurationChanged = subtitleConfigurationChanged || containsString(reconciliation.ConfigurationChanges, "subtitles")
 			readyInboxPaths = relocateReadyPaths(readyInboxPaths, orgReport)
 		}
 	}
 
-	metadataLibraryPaths := stageWorkPaths(changedLibraryPaths, pendingMetadataPaths, inventory, collection.InventoryScopeLibrary, metadataAlgorithmChanged)
-	subtitleLibraryPaths := stageWorkPaths(changedLibraryPaths, pendingSubtitlePaths, inventory, collection.InventoryScopeLibrary, subtitleAlgorithmChanged)
+	metadataLibraryPaths := stageWorkPaths(changedLibraryPaths, pendingMetadataPaths, inventory, collection.InventoryScopeLibrary, metadataAlgorithmChanged || metadataConfigurationChanged)
+	subtitleLibraryPaths := stageWorkPaths(changedLibraryPaths, pendingSubtitlePaths, inventory, collection.InventoryScopeLibrary, subtitleAlgorithmChanged || subtitleConfigurationChanged)
 	// A confirmed Inbox promotion is a path move, not new media. Carry the
 	// original eligible work over to its final path without repeating detection.
 	for _, pathBefore := range readyInboxPaths {
@@ -285,21 +304,26 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 	var metadataReport metadatarefresh.Report
 	metadataReport.CollectionID = library.ID
 	refreshCollectionAfterSidecars := false
+	metadataStageSucceeded := true
 	if metadataEnabled && tmdb != nil {
 		if len(metadataLibraryPaths) > 0 {
 			var stageReport metadatarefresh.Report
-			stageReport, err = runMetadataForPaths(ctx, db, coll, library, inventory, metadataLibraryPaths, false, tmdb)
+			stageReport, err = runMetadataForPaths(ctx, db, coll, library, inventory, metadataLibraryPaths, false, tmdb, metadataForced)
 			metadataReport.Items = append(metadataReport.Items, stageReport.Items...)
 			if err != nil {
 				log.Printf("metadata refresh for collection %q failed: %v", library.ID, err)
+				metadataStageSucceeded = false
+			} else {
+				metadataStageSucceeded = true
 			}
 		}
 		if len(inboxPaths) > 0 {
 			var stageReport metadatarefresh.Report
-			stageReport, err = runMetadataForPaths(ctx, db, coll, library, inventory, inboxPaths, true, tmdb)
+			stageReport, err = runMetadataForPaths(ctx, db, coll, library, inventory, inboxPaths, true, tmdb, false)
 			metadataReport.Items = append(metadataReport.Items, stageReport.Items...)
 			if err != nil {
 				log.Printf("Inbox metadata refresh for collection %q failed: %v", library.ID, err)
+				metadataStageSucceeded = false
 			}
 		}
 		if len(metadataReport.Items) > 0 {
@@ -320,8 +344,12 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 		if err := queueDeferredMetadataOperations(ctx, db, library.ID, inventory, coll.Type, appendUniquePaths(append([]string(nil), metadataLibraryPaths...), inboxPaths...), retryAt, "required metadata provider credentials are unavailable"); err != nil {
 			return fmt.Errorf("journal deferred metadata work: %w", err)
 		}
+		metadataStageSucceeded = true
+	} else if metadataEnabled {
+		metadataStageSucceeded = true
 	}
 
+	subtitleStageSucceeded := !subtitlesEnabled
 	if subtitlesEnabled && hasEligiblePaths(subtitleLibraryPaths, inboxPaths) {
 		keyEnv := strings.TrimSpace(subtitlePolicy.APIKeyEnv)
 		if keyEnv == "" {
@@ -342,6 +370,7 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 			if err := queueDeferredSubtitleOperations(ctx, db, library.ID, appendUniquePaths(append([]string(nil), subtitleLibraryPaths...), inboxPaths...), subtitlePolicy.Languages, time.Now().Add(scanInterval), reason); err != nil {
 				return fmt.Errorf("journal deferred subtitle work: %w", err)
 			}
+			subtitleStageSucceeded = true
 		} else {
 			if subtitlePolicy.RetryLimit > 0 {
 				client.SetRetryLimit(subtitlePolicy.RetryLimit)
@@ -355,6 +384,7 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 				refreshCollectionAfterSidecars = refreshCollectionAfterSidecars || subtitleReportMayHaveChangedStorage(report)
 				if runErr != nil {
 					log.Printf("subtitle refresh for collection %q failed: %v", library.ID, runErr)
+					subtitleStageSucceeded = false
 				} else {
 					encoded, _ := json.Marshal(report)
 					log.Printf("subtitle refresh report: %s", encoded)
@@ -366,28 +396,42 @@ func runLibraryAutomationCycle(ctx context.Context, collections *collection.Coll
 				refreshCollectionAfterSidecars = refreshCollectionAfterSidecars || subtitleReportMayHaveChangedStorage(report)
 				if runErr != nil {
 					log.Printf("Inbox subtitle refresh for collection %q failed: %v", library.ID, runErr)
+					subtitleStageSucceeded = false
 				} else {
 					encoded, _ := json.Marshal(report)
 					log.Printf("Inbox subtitle report: %s", encoded)
 				}
 			}
 		}
+	} else if subtitlesEnabled {
+		subtitleStageSucceeded = true
 	}
 	if refreshCollectionAfterSidecars {
 		if err := collections.RefreshCollectionWithInventory(ctx, library.ID, inventory); err != nil {
 			log.Printf("collection refresh after sidecar writes for %q failed: %v", library.ID, err)
 		}
 	}
+	if metadataStageSucceeded {
+		if err := updateLibraryStageState(ctx, db, library.ID, processingVersions, "metadata"); err != nil {
+			return fmt.Errorf("acknowledge metadata stage state: %w", err)
+		}
+	}
+	if subtitleStageSucceeded {
+		if err := updateLibraryStageState(ctx, db, library.ID, processingVersions, "subtitles"); err != nil {
+			return fmt.Errorf("acknowledge subtitle stage state: %w", err)
+		}
+	}
 	return nil
 }
 
-func runMetadataForPaths(ctx context.Context, db database.Repository, coll *collection.Collection, library collectionConfig, inventory []collection.InventoryEntry, paths []string, inboxOnly bool, client *provider.TMDb) (metadatarefresh.Report, error) {
+func runMetadataForPaths(ctx context.Context, db database.Repository, coll *collection.Collection, library collectionConfig, inventory []collection.InventoryEntry, paths []string, inboxOnly bool, client *provider.TMDb, force bool) (metadatarefresh.Report, error) {
 	policy := library.Media.Metadata
 	var report metadatarefresh.Report
 	err := perLibraryMediaJobs.run(ctx, library.ID, library.Media.MaxParallelJobs, func() error {
 		var runErr error
 		report, runErr = metadatarefresh.Run(ctx, coll, client, metadatarefresh.Options{
 			Write: true, InboxOnly: inboxOnly, Inventory: inventory, ItemPaths: paths,
+			Force:   force,
 			Journal: db, FetchNFO: policy.FetchNFO, FetchArtwork: policy.FetchArtwork,
 			OverwriteExisting: policy.OverwriteExisting, OverwriteArtwork: policy.OverwriteArtwork,
 			Language: policy.Language, FallbackLanguages: policy.FallbackLanguages,
