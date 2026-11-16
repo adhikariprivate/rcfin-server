@@ -36,6 +36,50 @@ On Windows, extract the ZIP archive, copy its example configuration to `rcfin.ya
 
 The latest published release is v1.2.1. Native Tailscale support was added after that release, so check the release notes for a newer binary that includes it.
 
+## Library layout and uploads
+
+RCFin expects movie and TV files to follow a recognizable folder structure. You can place files directly in the library in that structure, or upload them to the configured Inbox first. The Inbox is recommended for transfers because RCFin can wait until an upload is complete before processing it.
+
+For movies, use one folder per movie with the video file directly inside:
+
+```text
+Movies/
+└── Example Movie (2020)/
+    ├── Example Movie.mp4
+    ├── movie.nfo
+    └── poster.jpg
+```
+
+For TV, put episodes in season folders and include a season/episode token plus a title in each video filename:
+
+```text
+TV/
+└── The Fixers/
+    └── Season 01/
+        └── The Fixers S01E01 - The Pilot.mp4
+```
+
+New files can go straight into these library folders. For an upload workflow, put each new movie or show under `.Inbox` (or the path configured with `media.inbox_path`):
+
+```text
+.Inbox/
+├── Example Movie (2020)/
+│   └── Example Movie.mp4
+└── The Fixers/
+    └── Season 01/
+        └── The Fixers S01E01 - The Pilot.mp4
+```
+
+RCFin excludes the Inbox from normal library browsing. By default, it waits until an item's files have stopped changing for 10 minutes before treating the transfer as complete. You can change this with `media.inbox.stable_for` or configure a completion marker. On a library scan, ready Inbox items enter the configured processing stages: metadata and artwork can be fetched from TMDb, subtitles can be downloaded, and organization can move and normalize files into the library layout. These stages must be enabled in the configuration. Organization is disabled by default and defaults to dry-run mode; its folder and filename templates are configurable. See the [media layout and automation guide](docs/media-layout.md) for naming rules, details on the processing order, and configuration examples.
+
+## Clients and WebDAV
+
+Fladder is a tested compatible client for RCFin's Jellyfin-compatible playback and library workflows. Other Jellyfin clients may work with the endpoints they use; client support can vary because RCFin does not implement the full Jellyfin server API.
+
+RCFin can also publish a read-only WebDAV view for Kodi and other WebDAV clients. Enable the global WebDAV endpoint and the collection's WebDAV view in the configuration. The default endpoint path is `/dav/`; its virtual layout groups collections by display name and provides views such as `All`, `Genres`, `Actors`, `Directors`, and `Years`.
+
+For example, if the collection is named `Movies`, add `https://<server>:8096/dav/Movies/All/` as a WebDAV source in Kodi to browse the full movie list. You can add a category view such as `https://<server>:8096/dav/Movies/Genres/Science%20Fiction/` to browse one genre. Use the matching path for your server's scheme, address, port, collection name, and configured view labels. Sign in with an RCFin account that has access to that library. WebDAV does not modify media files; see the [WebDAV guide](docs/webdav.md) for its full layout and access behavior.
+
 ## Features
 
 ### Native Rclone support
