@@ -13,6 +13,8 @@ listen:
     state_dir: /var/lib/rcfin/tsnet
     auth_key_env: RCFIN_TAILSCALE_AUTH_KEY
     control_url: ""
+    port: "443"
+    https: true
 
 logfile: stdout
 cachedir: /var/cache/rcfin/images

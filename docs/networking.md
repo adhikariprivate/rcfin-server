@@ -15,6 +15,8 @@ listen:
     state_dir: /var/lib/rcfin/tsnet
     auth_key_env: RCFIN_TAILSCALE_AUTH_KEY
     control_url: "" # or https://headscale.example.com
+    port: "443"
+    https: true
 ```
 
 ## Public listener
@@ -32,7 +34,11 @@ The check uses the connection's remote address and does not trust forwarded-IP h
 
 ## Tailscale listener
 
-Enable `listen.tailscale.enabled` to start RCFin as a tsnet node and accept tailnet connections. It uses the configured `listen.port`, independently of the public listener's bind address. The hostname is the node name presented to the control plane. With MagicDNS enabled, Tailscale normally makes the node reachable under a name such as `handler.<tailnet-suffix>`; the suffix is controlled by the tailnet, not by RCFin.
+Enable `listen.tailscale.enabled` to start RCFin as a tsnet node and accept tailnet connections. The private listener can use its own port, independently of the public listener's port and bind address. The hostname is the node name presented to the control plane. With MagicDNS enabled, tailnet clients can use the short machine name for name resolution. The full name, such as `handler.<tailnet-suffix>`, uses a suffix controlled by the tailnet.
+
+Set `listen.tailscale.port: "443"` and `listen.tailscale.https: true` to serve HTTPS on the standard port. Clients can then open `https://handler.<tailnet-suffix>` without adding a port number. tsnet obtains a Tailscale HTTPS certificate for the full MagicDNS name. The bare short name works for MagicDNS resolution, but it is not a valid HTTPS certificate name. Tailscale HTTPS certificates must be enabled for the tailnet.
+
+Tailscale publishes public HTTPS certificate names in Certificate Transparency logs. The device hostname and tailnet DNS name used by the certificate are visible in those logs.
 
 Required configuration:
 
@@ -40,6 +46,8 @@ Required configuration:
 - `state_dir`: local directory where tsnet stores its identity and runtime state. RCFin creates it if needed. Persist it across restarts and deployments to reuse the same node identity.
 - `auth_key_env`: name of the environment variable containing an auth key. It defaults to `RCFIN_TAILSCALE_AUTH_KEY`. When Tailscale is enabled, the variable must contain a key at startup.
 - `control_url`: optional coordination server URL. Leave empty for Tailscale; set the Headscale URL for a Headscale deployment.
+- `port`: private listener port. If omitted, it uses `listen.port`; if HTTPS is explicitly enabled and the port is omitted, it uses `443`.
+- `https`: enables tsnet's HTTPS listener and automatic Tailscale certificate when `true`. When omitted, TLS follows the public listener for compatibility with earlier configurations.
 
 For example, set the secret outside the YAML file:
 
@@ -61,6 +69,6 @@ The Tailscale listener skips `listen.ip_acl` intentionally. The ACL controls onl
 
 ## TLS note
 
-When TLS is configured, the current server applies the configured certificate and key to both listeners. Ensure the certificate is valid for the name clients use on Tailscale, or terminate TLS at a proxy that is reachable within the tailnet. Without TLS configured, the tsnet listener accepts HTTP over the encrypted tailnet transport; this does not make the public HTTP listener encrypted.
+`listen.tls_cert` and `listen.tls_key` configure HTTPS on the public listener. Setting `listen.tailscale.https: true` uses Tailscale's certificate support on the private listener and does not require copying the public certificate. Tailscale's automatic certificate flow is tied to Tailscale's control plane and DNS. For Headscale, use HTTP over the encrypted tailnet or terminate HTTPS at a proxy with a certificate valid for the name clients use. Without TLS, the tsnet listener still uses the encrypted tailnet transport; the public HTTP listener remains unencrypted.
 
 See [configuration](configuration.md#listener-and-network-settings) for all listener fields and [accounts](accounts.md) for application-level users and grants.

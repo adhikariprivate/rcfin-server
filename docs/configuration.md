@@ -43,6 +43,8 @@ See [Networking and access](networking.md) for address binding, TLS, IP allow-li
 | `listen.tailscale.state_dir` | path | — | Required when enabled. Persistent writable directory for the node identity and state. |
 | `listen.tailscale.auth_key_env` | environment variable name | `RCFIN_TAILSCALE_AUTH_KEY` | Environment variable containing the enrollment auth key. When Tailscale is enabled, the selected variable must be non-empty. |
 | `listen.tailscale.control_url` | URL | empty | Optional custom control server URL, such as `https://headscale.example.com`; empty uses the default Tailscale control server. |
+| `listen.tailscale.port` | string | `listen.port`, or `443` when HTTPS is explicitly enabled | Port for the private listener. This can differ from the public port. |
+| `listen.tailscale.https` | boolean | follows the public TLS setting when omitted | Set `true` to use tsnet's Tailscale-managed HTTPS listener and certificate. Set `false` for HTTP over the encrypted tailnet. |
 
 ## Logging and caches
 

@@ -20,6 +20,10 @@ listen:
     auth_key_env: RCFIN_TAILSCALE_AUTH_KEY
     # Leave empty for Tailscale; set to e.g. https://headscale.example.com for Headscale.
     control_url: ""
+    # Separate private listener port. HTTPS on 443 avoids a port suffix in client URLs.
+    port: "443"
+    # Uses Tailscale-managed HTTPS certificates when enabled.
+    https: true
 
 # Logs go to the process stdout by default. Other values: stderr, none, or a
 # writable file path such as /var/log/rcfin/rcfin.log.

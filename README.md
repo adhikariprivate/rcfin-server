@@ -1,199 +1,175 @@
 # RCFin
 
-RCFin is a Jellyfin-compatible media server for people who store movies and TV shows on Rclone remotes.
+RCFin is a Jellyfin-compatible media server for movie and TV libraries stored on Rclone remotes.
 
-- RCFin implements part of the Jellyfin API for compatible clients. It is not a full Jellyfin server.
-- RCFin embeds Rclone v1.76.0, so you do not need a separate Rclone process or a FUSE mount.
-- RCFin serves original media files. It does not transcode, remux, or generate HLS.
-- Release builds target Linux, Windows, FreeBSD, OpenBSD, and NetBSD. Some architecture combinations are excluded.
-- RCFin stores application data in SQLite or PostgreSQL.
+- Play media from Rclone storage without setting up a FUSE mount or separate Rclone process.
+- Connect privately with native Tailscale support, including custom Headscale control servers.
+- Optionally fetch metadata and artwork from TMDb.
+- Optionally find and download subtitles from OpenSubtitles.com.
+- Give each account access only to the libraries you choose.
 
-Build RCFin from source with the repository's mise tasks. RCFin does not have a package installer.
+## Get started
 
-```bash
-mise install
-mise run build
+Download the archive for your operating system and processor from [GitHub Releases](https://github.com/adhikariprivate/rcfin-server/releases/latest). Release archives include the RCFin binary and an example configuration.
+
+For Linux on x86-64, save the matching archive to an empty folder, extract it, copy its example configuration, and start RCFin:
+
+```sh
+tar -xzf rcfin_*_linux_amd64.tar.gz
+if test -f config.example.yaml; then cp config.example.yaml rcfin.yaml; else cp rcfin.example.yaml rcfin.yaml; fi
+./rcfin --config rcfin.yaml
 ```
-```bash
-cp config.example.yaml rcfin.yaml
-$EDITOR rcfin.yaml
-./bin/rcfin --config rcfin.yaml
-# RCFin listens on port 8096 unless you change it.
+
+Before starting RCFin, edit `rcfin.yaml` and set the path to your Rclone config file and the `remote:path` values for your libraries. Create an Rclone config section for each named remote. Make sure the service account can read those files and write to the configured database and cache directories.
+
+In a second terminal, create the first administrator:
+
+```sh
+./rcfin --config rcfin.yaml user add --username admin --admin
 ```
 
-## Where to start
+Add the server address to a Jellyfin-compatible client and sign in with that account. RCFin listens on port `8096` by default.
 
-Run `./bin/rcfin --config rcfin.yaml` first. It starts the server with the configured libraries. On an empty database, create the first administrator with `./bin/rcfin --config rcfin.yaml user add --username admin --admin`. RCFin does not create a default account.
+Release archives use names such as `rcfin_<version>_linux_amd64.tar.gz`. Choose the archive for your operating system and architecture. Windows archives are ZIP files. See [release targets](docs/releases.md) for the full platform list.
 
-## Getting started
+On Windows, extract the ZIP archive, copy its example configuration to `rcfin.yaml`, then run `rcfin.exe --config rcfin.yaml` in PowerShell.
 
-1. Install the Go version selected by `mise.toml` with `mise install`.
-2. Create an Rclone config file with a section for each named remote. RCFin reads this file directly.
-3. Copy [`config.example.yaml`](config.example.yaml) to `rcfin.yaml`. Set the Rclone config path, library remote paths, and persistent local paths.
-4. Make sure the service account can read the config and Rclone credentials. It must be able to write the database, cache directories, and tsnet state directory when Tailscale is enabled.
-5. Build RCFin with `mise run build`, then start `./bin/rcfin --config rcfin.yaml`.
-6. In another terminal, create an administrator with `./bin/rcfin --config rcfin.yaml user add --username admin --admin`.
-7. Add the server address to a Jellyfin-compatible client and sign in with that account.
-
-The default public HTTP port is `8096`. Use [`config.example.full.yaml`](config.example.full.yaml) for every application setting and VFS option. The [configuration reference](docs/configuration.md) explains the fields.
+The latest published release is v1.2.1. Native Tailscale support was added after that release, so check the release notes for a newer binary that includes it.
 
 ## Features
 
 ### Native Rclone support
 
-RCFin links the Rclone Go SDK into the server. It reads remote definitions and credentials from an Rclone config file. Each collection uses an Rclone `remote:path`, such as `media:Movies`. RCFin includes the backends compiled into Rclone v1.76.0.
+RCFin includes the Rclone Go SDK. Configure remotes in an Rclone config file, then point each library to a `remote:path`, such as `media:Movies`. RCFin includes the backends compiled into Rclone v1.76.0.
 
 ### Direct playback from remote storage
 
-RCFin reads media through Rclone's VFS and serves byte ranges to clients. Compatible clients can seek without downloading the whole library first. Playback speed depends on the storage backend and its range-read support.
+RCFin streams media from Rclone storage and supports HTTP byte ranges. Compatible clients can seek through a file without downloading the entire library first. Playback speed depends on the storage backend and its range-read support.
 
-### Separate storage settings for each library
+### Per-library storage settings
 
-Each collection has its own Rclone filesystem and VFS settings. Tune directory caching, read chunks, and local cache limits separately for each library.
-
-### Jellyfin-compatible client API
-
-RCFin implements selected Jellyfin API endpoints for media clients. Client support depends on the workflow each app uses. RCFin does not implement the full Jellyfin API.
-
-### Jellyfin client sign-in
-
-Clients can sign in with RCFin accounts and use authenticated API tokens for supported requests.
-
-### Library browsing
-
-Compatible clients can browse configured libraries, movies, shows, seasons, and episodes.
-
-### Search
-
-Clients can search the media catalog by supported item fields.
-
-### Playback state
-
-RCFin stores user playback progress and resume state in the selected database.
-
-### External subtitle tracks
-
-RCFin advertises SRT and VTT sidecar subtitles for supported items and serves them through authenticated Jellyfin-compatible URLs. It does not inspect subtitles embedded in media files.
-
-### Quick Connect
-
-Quick Connect is available when `jellyfin.quick_connect` is enabled. It is disabled by default.
-
-### Movie collections
-
-Add movie libraries as collections with a stable ID, display name, Rclone path, and optional VFS or media settings.
-
-### TV collections
-
-Add show libraries as collections. RCFin recognizes supported season and episode layouts described in the [media layout guide](docs/media-layout.md).
-
-One server can host multiple movie and TV collections.
-
-### Account management
-
-Create, disable, delete, and administer accounts from the RCFin CLI. There is no public registration flow. Passwords are entered through hidden terminal prompts, not command-line arguments.
-
-### Library access grants
-
-Regular accounts start with no library access. Grant access by collection ID. Administrators can access every configured collection. Jellyfin routes and WebDAV both enforce these grants.
-
-### Public HTTP listener
-
-RCFin listens on the configured public address and port. The default port is `8096`. Bind to a specific interface, such as `127.0.0.1`, when a local reverse proxy should accept public traffic.
-
-### TLS with your certificate
-
-Set `listen.tls_cert` and `listen.tls_key` to enable HTTPS. RCFin does not request or renew certificates automatically. The configured certificate is also used by the Tailscale listener when TLS is enabled.
-
-### Public IP allow list
-
-Set `listen.ip_acl` to a comma-separated list of IP addresses or CIDR ranges. It is an allow list. An empty value allows all source IPs at the middleware level. The rule applies to the public listener only.
+Each library has its own Rclone filesystem and VFS settings. Set directory cache time, read chunk size, and local cache limits for each library.
 
 ### Native Tailscale support
 
-Enable `listen.tailscale` to run RCFin as a tsnet node and accept connections from the tailnet. Configure the node hostname, auth key environment variable, and persistent state directory. Keep the state directory across restarts to reuse the same node identity. The Tailscale listener bypasses the public IP allow list.
+Enable the Tailscale listener to run RCFin as a tsnet node. Set a hostname and auth key, then keep the state directory on persistent storage so restarts reuse the same node identity. Set its port to `443` and enable HTTPS to use Tailscale's automatic certificate. Tailnet clients can then open the full MagicDNS HTTPS name without adding `:8096`. The private listener bypasses the public IP allow list.
 
-### Headscale control server
+### Headscale support
 
-Set `listen.tailscale.control_url` to your Headscale URL to join a self-hosted control server. Headscale's DNS settings determine the full device name. RCFin sets the machine hostname, such as `handler`, but does not configure the DNS suffix.
+Set `listen.tailscale.control_url` to join a custom control server such as Headscale. RCFin sets the node hostname. Headscale controls its DNS suffix and device name. Tailscale's automatic HTTPS certificate support may not be available with Headscale; use HTTP over the encrypted tailnet or a TLS proxy with a valid certificate.
+
+### Public HTTP listener
+
+RCFin listens on port `8096` by default. Set a bind address to control which interface accepts public connections.
+
+### TLS certificates
+
+Provide both a certificate and key to enable HTTPS. RCFin does not request or renew certificates automatically.
+
+### Public IP allow list
+
+Restrict the public listener with comma-separated IP addresses or CIDR ranges. The list is an allow list. Tailscale connections use tailnet policy and do not pass through this public IP check.
+
+### Jellyfin client sign-in
+
+Users sign in to compatible Jellyfin clients with accounts managed by RCFin. The API supports authenticated requests for the implemented client workflows.
+
+### Library browsing
+
+Browse configured movie and TV libraries, seasons, episodes, and supported metadata through Jellyfin-compatible endpoints.
+
+### Search
+
+Search supported catalog fields from compatible Jellyfin clients.
+
+### Playback progress
+
+RCFin saves user playback progress and resume state in the configured database.
+
+### Quick Connect
+
+Enable Quick Connect in the configuration for clients that support it. It is disabled by default.
+
+### Movie libraries
+
+Create a collection with type `movies` and set its Rclone remote path. Each collection has a stable ID used for account permissions.
+
+### TV libraries
+
+Create a collection with type `shows`. RCFin recognizes supported season folders and episode filenames. See the [media layout guide](docs/media-layout.md) for examples.
+
+### Account management
+
+Create, disable, enable, delete, and administer accounts with the RCFin command line. There is no public sign-up form. The server does not create a default account.
+
+### Per-library account permissions
+
+Regular accounts have no library access until you grant it. Administrators can access every configured library. Jellyfin routes and WebDAV use the same library grants.
 
 ### Read-only WebDAV
 
-Enable WebDAV to publish virtual views of your libraries. It can expose All, Genres, Actors, Directors, Years, and Studios views, with optional NFO and artwork sidecars. WebDAV does not create or move media files. Users see only collections their account can access.
+Publish virtual library views through WebDAV. Views can include All, Genres, Actors, Directors, Years, and Studios. RCFin can also expose NFO and artwork sidecars. WebDAV does not move or modify media files.
 
-### Scheduled library scans
+### Automatic library scans
 
-RCFin scans each library on a configurable interval. Directory listing cache expiry is a separate Rclone VFS setting. A scan can discover changes after the VFS directory cache has refreshed.
+RCFin scans each library on a configurable interval. You can set a different interval for each collection. Rclone's directory cache has a separate expiration setting.
 
 ### Inbox upload readiness
 
-Each collection can have an Inbox path excluded from normal playback browsing. RCFin can wait for a completion marker or for files to stay unchanged for a configured quiet period before processing an upload.
+Set an Inbox path for new uploads. RCFin excludes it from normal library browsing and can wait for a completion marker or a quiet period before processing an item.
 
-### TMDb metadata lookup
+### Automatic metadata fetching
 
-The optional metadata stage uses TMDb to find movie and show details. It preserves existing metadata by default. Set a TMDb credential through the environment or a protected `.env` file.
-
-### NFO sidecars
-
-When enabled, metadata refresh writes Kodi-style NFO files beside movies, shows, or episodes. Existing NFO fields remain unless replacement is configured.
+Enable the TMDb provider to fetch movie and TV metadata. Configure the language and overwrite behavior. RCFin preserves existing NFO files by default.
 
 ### Artwork downloads
 
-The metadata stage can download poster and backdrop images from TMDb. It preserves existing artwork by default. Artwork size and format limits are configurable.
+Enable artwork fetching to download posters and backdrops from TMDb. Configure image size limits and overwrite behavior. RCFin preserves existing artwork files by default.
 
-### Subtitle downloads
+### Automatic subtitle downloads
 
-The optional subtitle stage searches OpenSubtitles.com and saves matching SRT or VTT sidecars. Configure languages, forced and hearing-impaired preferences, confidence, file size, and overwrite behavior. Provider credentials belong in environment variables or a protected `.env` file.
+Enable OpenSubtitles.com to search for and download SRT or VTT sidecars. Choose languages, forced or hearing-impaired tracks, match confidence, and overwrite behavior.
 
-### Dry-run media organization
+### Inbox organization plans
 
-RCFin can propose normalized movie and TV paths for ready Inbox items. Organization is disabled by default and dry-run is on by default. Preview plans before enabling writes. Unknown files, uncertain matches, and destination conflicts are left for review.
+RCFin can propose movie and TV destinations for ready Inbox items. Organization is disabled by default and uses dry-run mode by default. Review the plan before enabling file moves.
 
-### Existing-path normalization
+### Existing-library normalization
 
-An optional separate workflow can plan normalized paths for existing library items outside the Inbox. It is disabled by default and has its own dry-run setting.
+Preview normalized paths for existing library items outside the Inbox. This workflow has its own enable and dry-run settings.
 
-### SQLite storage
+### SQLite database
 
-SQLite is the default database for account and application state. Keep its file on persistent storage.
+Use SQLite for a single RCFin server with persistent local storage. SQLite is the default database.
 
-### PostgreSQL storage
+### PostgreSQL database
 
-PostgreSQL stores account and application state in a server outside the RCFin process. Artwork and Rclone VFS caches still use local storage.
+Use PostgreSQL when you want application data stored outside the RCFin host or container. Artwork and Rclone VFS caches remain local.
 
-### Artwork resize cache
+### Artwork cache
 
-RCFin caches resized artwork in `cachedir`. The cache is local and can be rebuilt.
+RCFin stores resized artwork in a local cache directory. The cache can be rebuilt if it is removed.
 
-### Rclone media cache
+### Rclone VFS cache
 
-Rclone's VFS can cache media ranges on local storage. Configure cache mode, size, and age separately for each collection. The cache can be rebuilt. Keep the database and tsnet state directory on persistent storage when you need to retain their data and identity.
+Rclone can cache the media ranges clients read. Configure cache mode, maximum size, and age for each library. The cache can be rebuilt if it is removed.
 
-## Limits
+## Playback compatibility
 
-- RCFin serves original files. It does not transcode, remux, or create HLS streams.
-- A client must support the media's codecs and container for direct playback.
-- RCFin implements selected Jellyfin-compatible routes, not the full Jellyfin server API.
-- Subtitle automation checks sidecar files. It does not inspect embedded subtitle streams.
-- Storage behavior and seek performance vary by Rclone backend.
+RCFin serves original media. It does not transcode, remux, or create HLS streams. The client must support the media's codecs and container. RCFin implements selected Jellyfin-compatible endpoints, not the full Jellyfin server API. Subtitle playback uses sidecar files; embedded subtitle streams are not inspected by subtitle automation.
 
-## Documentation
+## Configuration and support
 
+- [Starter configuration](config.example.yaml)
+- [Full configuration example](config.example.full.yaml)
 - [Configuration reference](docs/configuration.md)
 - [Networking and access](docs/networking.md)
 - [Rclone storage](docs/rclone-storage.md)
 - [VFS options](docs/vfs-options.md)
 - [Account administration](docs/accounts.md)
-- [Virtual WebDAV](docs/webdav.md)
+- [WebDAV](docs/webdav.md)
 - [Media layout and automation](docs/media-layout.md)
 - [Database backends](docs/database.md)
-- [Architecture](docs/architecture.md)
 - [Release targets](docs/releases.md)
 
-## Help and maintenance
-
-The project is maintained in this public repository. Ask questions or report bugs in [GitHub Issues](https://github.com/adhikariprivate/rcfin-server/issues).
-
-See [Contributing](CONTRIBUTING.md) for local development instructions and [LICENSE](LICENSE) for the MIT License. The repository does not currently contain a `CHANGELOG.md`; release information is in [docs/releases.md](docs/releases.md) and [GitHub Releases](https://github.com/adhikariprivate/rcfin-server/releases).
-
-RCFin is a separately maintained fork of [Jellofin Server](https://github.com/erikbos/jellofin-server).
+RCFin is a separately maintained fork of [Jellofin Server](https://github.com/erikbos/jellofin-server). For help or bug reports, use [GitHub Issues](https://github.com/adhikariprivate/rcfin-server/issues). To contribute, read [CONTRIBUTING.md](CONTRIBUTING.md). RCFin is licensed under the [MIT License](LICENSE).

@@ -56,6 +56,8 @@ type configFile struct {
 			StateDir   string `mapstructure:"state_dir"`
 			AuthKeyEnv string `mapstructure:"auth_key_env"`
 			ControlURL string `mapstructure:"control_url"`
+			Port       string `mapstructure:"port"`
+			HTTPS      *bool  `mapstructure:"https"`
 		} `mapstructure:"tailscale"`
 	}
 	Cachedir string `mapstructure:"cachedir"`
@@ -740,17 +742,35 @@ func runServer() {
 		if err := tsServer.Start(); err != nil {
 			log.Fatalf("start Tailscale: %v", err)
 		}
-		tsListener, err := tsServer.Listen("tcp", ":"+config.Listen.Port)
+		tsPort := strings.TrimSpace(config.Listen.Tailscale.Port)
+		if tsPort == "" {
+			tsPort = config.Listen.Port
+			if config.Listen.Tailscale.HTTPS != nil && *config.Listen.Tailscale.HTTPS {
+				tsPort = "443"
+			}
+		}
+		tsHTTPS := useTLS
+		if config.Listen.Tailscale.HTTPS != nil {
+			tsHTTPS = *config.Listen.Tailscale.HTTPS
+		}
+		var tsListener net.Listener
+		if config.Listen.Tailscale.HTTPS != nil && *config.Listen.Tailscale.HTTPS {
+			tsListener, err = tsServer.ListenTLS("tcp", ":"+tsPort)
+		} else {
+			tsListener, err = tsServer.Listen("tcp", ":"+tsPort)
+			if err == nil && tsHTTPS {
+				tsListener = tls.NewListener(tsListener, srv.TLSConfig)
+			}
+		}
 		if err != nil {
 			_ = tsServer.Close()
 			log.Fatalf("listen on Tailscale: %v", err)
 		}
 		tsHTTPServer = &http.Server{Handler: baseHandler}
-		if useTLS {
-			tsListener = tls.NewListener(tsListener, srv.TLSConfig)
-			log.Printf("Serving HTTPS on Tailscale as %s:%s", config.Listen.Tailscale.Hostname, config.Listen.Port)
+		if tsHTTPS {
+			log.Printf("Serving HTTPS on Tailscale as %s:%s", config.Listen.Tailscale.Hostname, tsPort)
 		} else {
-			log.Printf("Serving HTTP on Tailscale as %s:%s", config.Listen.Tailscale.Hostname, config.Listen.Port)
+			log.Printf("Serving HTTP on Tailscale as %s:%s", config.Listen.Tailscale.Hostname, tsPort)
 		}
 		go func() { serveErrors <- tsHTTPServer.Serve(tsListener) }()
 	}
