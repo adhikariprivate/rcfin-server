@@ -220,7 +220,7 @@ retry immediately by operation ID when appropriate.
 At startup, RCFin optionally loads `.env` from its working directory. Set
 `RCFIN_ENV_FILE` to use a different dotenv path. Variables already present in
 the process environment take precedence. For the provider credentials shown
-in `rcfin.example.yaml`, RCFin accepts either the configured `RCFIN_*` names
+in `config.example.full.yaml`, RCFin accepts either the configured `RCFIN_*` names
 or these common unprefixed names: `TMDB_READ_ACCESS_TOKEN` (preferred) or
 `TMDB_API_KEY`, `OPENSUBTITLES_API_KEY`, `OPENSUBTITLES_USERNAME`, and
 `OPENSUBTITLES_PASSWORD`. The unprefixed variables are mapped to their

@@ -11,6 +11,15 @@ listen:
   tls_key: ""
   # Optional comma-separated client IP allow list; empty allows all clients.
   ip_acl: ""
+  # Optional private listener inside Tailscale. Its requests bypass ip_acl.
+  tailscale:
+    enabled: false
+    hostname: handler
+    state_dir: /var/lib/rcfin/tsnet
+    # Name of the environment variable holding the Tailscale/Headscale auth key.
+    auth_key_env: RCFIN_TAILSCALE_AUTH_KEY
+    # Leave empty for Tailscale; set to e.g. https://headscale.example.com for Headscale.
+    control_url: ""
 
 # Logs go to the process stdout by default. Other values: stderr, none, or a
 # writable file path such as /var/log/rcfin/rcfin.log.
@@ -20,6 +29,8 @@ logfile: stdout
 # media itself is read from the configured Rclone remotes below.
 cachedir: /var/cache/rcfin/images
 scan_interval: 30m # Default cadence for the complete per-library pipeline.
+# Legacy alias for scan_interval. Prefer scan_interval in new configurations.
+rescan_interval: ""
 
 database:
   # Supported drivers: sqlite (default) and postgres.
@@ -61,13 +72,13 @@ collections:
     remote: files:HTPC/Movies
     media:
       scan_interval: 30m # One inventory cadence for Inbox, metadata, and subtitles.
-      missing_grace: 7d # Ignore a disappeared path until it stays absent this long.
+      missing_grace: 168h # Ignore a disappeared path until it stays absent this long.
       # Explicit relative intake path. It is excluded from the playable scan.
       inbox_path: .Inbox
       inbox:
         stable_for: 10m
-        # Optional; the uploader must create this only after all files finish.
-        # completion_marker: .rcfin-complete
+        # Optional; set only when the uploader creates this after all files finish.
+        completion_marker: ""
       # Shared concurrency limit across metadata, subtitles, and organization.
       # Zero or omission defaults to one; accepted range is 0..32.
       max_parallel_jobs: 1
@@ -90,6 +101,8 @@ collections:
         file_format: "{folder} [{quality}-{resolution}]{version} [{edition}] [{release_group}].{ext}"
         episode_fallback_languages: [en]
         allowed_extensions: [mkv, mp4, m4v, m4u, mov, avi, divx, webm, mpg, mpeg, mpe, mpeg2, m1v, m2v, ts, mts, m2ts, vob, wmv, flv, ogv, ogm, 3gp, 3g2]
+        stable_for: 10m
+        completion_marker: .rcfin-complete
       metadata:
         enabled: false
         provider: tmdb
@@ -108,6 +121,8 @@ collections:
         fetch_nfo: true
         overwrite_existing: false
         overwrite_artwork: false
+        minimum_confidence: 0.80
+        refresh_existing_after: 2160h
       subtitles:
         enabled: false
         provider: opensubtitles
@@ -124,24 +139,49 @@ collections:
         retry_limit: 3
         max_download_bytes: 20971520
     vfs:
+      no_modtime: false
+      no_checksum: false
+      no_seek: false
       dir_cache_time: 30m
+      vfs_refresh: false
       poll_interval: 0s
       read_only: true
+      vfs_links: false
       vfs_cache_mode: full
+      vfs_cache_poll_interval: 1m
       vfs_cache_max_size: 20GiB
       vfs_cache_max_age: 24h
+      vfs_cache_min_free_space: "off"
       vfs_read_chunk_size: 32M
       vfs_read_chunk_size_limit: 256M
+      vfs_read_chunk_streams: 0
+      dir_perms: "0777"
+      file_perms: "0666"
+      link_perms: "0777"
+      vfs_case_insensitive: false
+      vfs_block_norm_dupes: false
+      vfs_write_wait: 1s
+      vfs_read_wait: 20ms
+      vfs_write_back: 5s
+      vfs_read_ahead: 0
+      vfs_used_is_size: false
+      vfs_fast_fingerprint: false
+      vfs_disk_space_total_size: "off"
+      umask: "0022"
+      uid: 0
+      gid: 0
       vfs_handle_caching: 1m
+      vfs_metadata_extension: ""
     webdav:
       enabled: true
-      views: [all, genres, actors, directors, years]
+      views: [all, genres, actors, directors, years, studios]
       labels:
         all: All
         genres: Genres
         actors: Actors
         directors: Directors
         years: Years
+        studios: Studios
       file_name: "{title} ({year}).{ext}"
       title_folder: "{title} ({year})"
       nfo: true
@@ -219,7 +259,7 @@ collections:
       vfs_handle_caching: 1m
     webdav:
       enabled: true
-      views: [all, genres, actors, directors, years]
+      views: [all, genres, actors, directors, years, studios]
       episode_file_name: "{series} - S{season:02}E{episode:02} - {episode_title}.{ext}"
       nfo: true
       artwork: true

@@ -20,6 +20,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+	"tailscale.com/tsnet"
 
 	"github.com/adhikariprivate/rcfin-server/internal/collection"
 	"github.com/adhikariprivate/rcfin-server/internal/database"
@@ -44,11 +45,18 @@ var (
 
 type configFile struct {
 	Listen struct {
-		Address string `mapstructure:"address"`
-		Port    string `mapstructure:"port"`
-		TlsCert string `mapstructure:"tls_cert"`
-		TlsKey  string `mapstructure:"tls_key"`
-		IPACL   string `mapstructure:"ip_acl"`
+		Address   string `mapstructure:"address"`
+		Port      string `mapstructure:"port"`
+		TlsCert   string `mapstructure:"tls_cert"`
+		TlsKey    string `mapstructure:"tls_key"`
+		IPACL     string `mapstructure:"ip_acl"`
+		Tailscale struct {
+			Enabled    bool   `mapstructure:"enabled"`
+			Hostname   string `mapstructure:"hostname"`
+			StateDir   string `mapstructure:"state_dir"`
+			AuthKeyEnv string `mapstructure:"auth_key_env"`
+			ControlURL string `mapstructure:"control_url"`
+		} `mapstructure:"tailscale"`
 	}
 	Cachedir string `mapstructure:"cachedir"`
 	Database struct {
@@ -674,9 +682,12 @@ func runServer() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	server := HttpLog(IPACLmiddleware(config.Listen.IPACL, canon.Middleware(r)))
+	// Logging and canonicalization are shared by both endpoints. The public
+	// endpoint alone applies the configured IP allow list.
+	baseHandler := HttpLog(canon.Middleware(r))
+	publicHandler := IPACLmiddleware(config.Listen.IPACL, baseHandler)
 
-	srv := &http.Server{Addr: addr, Handler: server}
+	srv := &http.Server{Addr: addr, Handler: publicHandler}
 	useTLS := config.Listen.TlsCert != "" && config.Listen.TlsKey != ""
 	if useTLS {
 		kpr, err := NewKeypairReloader(config.Listen.TlsCert, config.Listen.TlsKey)
@@ -688,16 +699,61 @@ func runServer() {
 	} else {
 		log.Printf("Serving HTTP on %s", addr)
 	}
-	serveErrors := make(chan error, 1)
+	serveErrors := make(chan error, 2)
 	go func() {
 		var serveErr error
-		if useTLS {
-			serveErr = srv.ListenAndServeTLS("", "")
-		} else {
-			serveErr = srv.ListenAndServe()
+		listener, listenErr := net.Listen("tcp", addr)
+		if listenErr != nil {
+			serveErrors <- listenErr
+			return
 		}
+		if useTLS {
+			listener = tls.NewListener(listener, srv.TLSConfig)
+		}
+		serveErr = srv.Serve(listener)
 		serveErrors <- serveErr
 	}()
+	var tsServer *tsnet.Server
+	var tsHTTPServer *http.Server
+	if config.Listen.Tailscale.Enabled {
+		if strings.TrimSpace(config.Listen.Tailscale.Hostname) == "" || strings.TrimSpace(config.Listen.Tailscale.StateDir) == "" {
+			log.Fatal("listen.tailscale.hostname and listen.tailscale.state_dir are required when Tailscale is enabled")
+		}
+		if err := os.MkdirAll(config.Listen.Tailscale.StateDir, 0700); err != nil {
+			log.Fatalf("create Tailscale state directory: %v", err)
+		}
+		var authKey string
+		authKeyEnv := config.Listen.Tailscale.AuthKeyEnv
+		if authKeyEnv == "" {
+			authKeyEnv = "RCFIN_TAILSCALE_AUTH_KEY"
+		}
+		authKey = os.Getenv(authKeyEnv)
+		if strings.TrimSpace(authKey) == "" {
+			log.Fatalf("Tailscale is enabled but auth key environment variable %s is empty", authKeyEnv)
+		}
+		tsServer = &tsnet.Server{
+			Hostname:   config.Listen.Tailscale.Hostname,
+			Dir:        config.Listen.Tailscale.StateDir,
+			AuthKey:    authKey,
+			ControlURL: config.Listen.Tailscale.ControlURL,
+		}
+		if err := tsServer.Start(); err != nil {
+			log.Fatalf("start Tailscale: %v", err)
+		}
+		tsListener, err := tsServer.Listen("tcp", ":"+config.Listen.Port)
+		if err != nil {
+			_ = tsServer.Close()
+			log.Fatalf("listen on Tailscale: %v", err)
+		}
+		tsHTTPServer = &http.Server{Handler: baseHandler}
+		if useTLS {
+			tsListener = tls.NewListener(tsListener, srv.TLSConfig)
+			log.Printf("Serving HTTPS on Tailscale as %s:%s", config.Listen.Tailscale.Hostname, config.Listen.Port)
+		} else {
+			log.Printf("Serving HTTP on Tailscale as %s:%s", config.Listen.Tailscale.Hostname, config.Listen.Port)
+		}
+		go func() { serveErrors <- tsHTTPServer.Serve(tsListener) }()
+	}
 	select {
 	case serveErr := <-serveErrors:
 		if serveErr != nil && serveErr != http.ErrServerClosed {
@@ -710,6 +766,17 @@ func runServer() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("graceful HTTP shutdown failed: %v", err)
 		_ = srv.Close()
+	}
+	if tsHTTPServer != nil {
+		if err := tsHTTPServer.Shutdown(shutdownCtx); err != nil {
+			log.Printf("graceful Tailscale HTTP shutdown failed: %v", err)
+			_ = tsHTTPServer.Close()
+		}
+	}
+	if tsServer != nil {
+		if err := tsServer.Close(); err != nil {
+			log.Printf("close Tailscale server: %v", err)
+		}
 	}
 	shutdownCancel()
 	cancel()

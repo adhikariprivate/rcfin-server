@@ -6,7 +6,7 @@ Thanks for considering a contribution. Changes should preserve the server's Jell
 
 1. Install [mise](https://mise.jdx.dev/).
 2. Run `mise install` to install the Go version pinned in `mise.toml`.
-3. Copy `rcfin.example.yaml` to `rcfin.yaml` and configure a local SQLite path and filesystem library roots.
+3. Copy `config.example.yaml` to `rcfin.yaml` and configure a local SQLite path and filesystem library roots. Use `config.example.full.yaml` as the exhaustive setting reference.
 4. Run `mise run build` to compile the server or `mise run test` to run the Go test suite.
 
 ## Repository structure

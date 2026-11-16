@@ -134,5 +134,6 @@ WebDAV behavior is implemented with Go's `golang.org/x/net/webdav` handler and
 a custom read-only virtual filesystem. The endpoint follows standard DAV
 directory discovery and file retrieval behavior, but client interoperability
 should still be checked with the clients used in a deployment. See
-[`rcfin.example.yaml`](../rcfin.example.yaml) for a complete configuration
-example.
+[`config.example.full.yaml`](../config.example.full.yaml) for a complete
+configuration example and [the configuration reference](configuration.md) for
+all supported WebDAV settings.

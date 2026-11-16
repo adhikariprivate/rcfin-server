@@ -1,0 +1,62 @@
+# Starter configuration. Replace the Rclone path and collection paths.
+# Keep database/cache/state directories on persistent writable storage.
+
+listen:
+  address: ""
+  port: "8096"
+  tls_cert: ""
+  tls_key: ""
+  ip_acl: ""
+  tailscale:
+    enabled: false
+    hostname: handler
+    state_dir: /var/lib/rcfin/tsnet
+    auth_key_env: RCFIN_TAILSCALE_AUTH_KEY
+    control_url: ""
+
+logfile: stdout
+cachedir: /var/cache/rcfin/images
+scan_interval: 30m
+
+database:
+  driver: sqlite
+  sqlite:
+    filename: /var/lib/rcfin/rcfin.db
+  postgres:
+    url: ""
+
+rclone:
+  config: /etc/rcfin/rclone.conf
+  cache_dir: /var/cache/rcfin/rclone
+
+jellyfin:
+  server_id: ""
+  server_name: RCFin
+  quick_connect: false
+  image_quality_poster: 40
+
+webdav:
+  enabled: false
+  path: /dav/
+  cache:
+    directory_ttl: 1m
+
+collections:
+  - id: movies
+    name: Movies
+    type: movies
+    remote: media:Movies
+    vfs:
+      read_only: true
+      vfs_cache_mode: full
+      vfs_cache_max_size: 20GiB
+      vfs_cache_max_age: 24h
+    media:
+      scan_interval: 30m
+      missing_grace: 168h
+      inbox_path: .Inbox
+      inbox:
+        stable_for: 10m
+      max_parallel_jobs: 1
+    webdav:
+      enabled: true

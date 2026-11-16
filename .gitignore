@@ -25,7 +25,8 @@ todo.txt
 
 rcfin.cfg
 rcfin*.yaml
-!rcfin.example.yaml
+!config.example.yaml
+!config.example.full.yaml
 screenlog.*
 *.db
 

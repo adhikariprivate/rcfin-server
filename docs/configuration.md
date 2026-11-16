@@ -1,92 +1,223 @@
-# Configuration
+# Configuration reference
 
-RCFin reads YAML from `rcfin.yaml` in the current working directory by default. Select another file with `--config /path/to/file.yaml`. Start from the complete [example configuration](../rcfin.example.yaml), then replace its paths and Rclone remote paths with values for your host.
-
-## Complete example
-
-The example file is the canonical full configuration. It includes optional listen/TLS/access-control fields, logging, local database and cache paths, global Rclone settings, Jellyfin settings, two library definitions, and per-library VFS tuning.
+RCFin reads a YAML file from `rcfin.yaml` in the working directory unless `--config PATH` is supplied. The complete field-by-field example is [`config.example.full.yaml`](../config.example.full.yaml); [`config.example.yaml`](../config.example.yaml) is a shorter starting point. Configuration is unmarshaled by Viper. Unknown non-VFS YAML keys are not guaranteed to fail startup, so use the names in this reference.
 
 ```sh
-cp rcfin.example.yaml rcfin.yaml
+cp config.example.yaml rcfin.yaml
 ${EDITOR:-vi} rcfin.yaml
 ./rcfin --config rcfin.yaml
 ```
 
-When using SQLite, create the parent directory for its database file. For either driver, create local cache directories before startup and ensure the RCFin process user can write to them. For example:
+Create the parent directories and ensure the service account can read or write them as appropriate. Keep credentials in environment variables, a secret manager, or a protected `.env` file; do not commit secrets in YAML.
 
-```sh
-install -d -o rcfin -g rcfin /var/lib/rcfin /var/cache/rcfin/images /var/cache/rcfin/rclone
-```
+Application duration fields use Go duration syntax (`10s`, `5m`, `24h`). Use hours for day-scale intervals (`168h` for seven days); a `d` unit is not accepted by Go's duration parser. Rclone VFS values follow Rclone's own syntax, documented in the [VFS reference](vfs-options.md).
 
-For PostgreSQL, set `database.driver: postgres` and provide a PostgreSQL connection URL in `database.postgres.url` or `RCFIN_POSTGRES_URL`. For example, configure the URL as a deployment secret and leave the YAML value empty. RCFin creates its tables and applies its database migration on startup, so the database role needs permission to create tables and indexes in the selected schema. The server and account-management CLI use the same selected database.
+## Top-level settings
 
-See [Database backends](database.md) for connection URL guidance, which data must persist, playback write behavior, and the SQLite-to-PostgreSQL limitation.
+| YAML key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `listen` | object | — | Public listener, access rules, and optional Tailscale listener. |
+| `logfile` | string | `stdout` | `stdout`, `stderr`, `none`, or a writable file path. |
+| `cachedir` | path | empty | Local artwork-resize cache root. |
+| `scan_interval` | duration | `30m` | Default interval for each collection inventory and media-work cycle. Must be positive when set. |
+| `rescan_interval` | duration | unused | Legacy alias used only when `scan_interval` is empty. New configs should use `scan_interval`. |
+| `database` | object | SQLite | Durable account and application state backend. |
+| `rclone` | object | Rclone defaults | Global Rclone config file and local VFS cache root. |
+| `jellyfin` | object | built-in defaults | Jellyfin-compatible server identity and selected client behavior. |
+| `webdav` | object | disabled | Global read-only WebDAV endpoint and directory cache. |
+| `collections` | list | required for libraries | Library definitions. Each has an independent Rclone filesystem/VFS. |
 
-## Rclone config path and library remote
+## Listener and network settings
 
-`rclone.config` is the path to the Rclone INI **file**, including its filename. It is not the directory containing the file. For example, if the file on disk is `/home/rcfin/apps/rcfin/rclone.config`, use:
+See [Networking and access](networking.md) for address binding, TLS, IP allow-list syntax, Tailscale/Headscale setup, MagicDNS, and security boundaries.
 
-```yaml
-rclone:
-  config: /home/rcfin/apps/rcfin/rclone.config
-  cache_dir: /home/rcfin/apps/rcfin/vfs
-```
+| YAML key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `listen.address` | string | empty | Public bind address. Empty lets Go bind its default wildcard address; use `127.0.0.1` to bind locally behind a proxy. |
+| `listen.port` | string | `8096` | TCP port shared by the public listener and optional Tailscale listener. |
+| `listen.tls_cert` | path | empty | TLS certificate. HTTPS is enabled only when both certificate and key are set. |
+| `listen.tls_key` | path | empty | TLS private key. |
+| `listen.ip_acl` | comma-separated IP/CIDR list | empty | Public-listener allow list. Empty allows all source IPs. Tailscale requests bypass this ACL. |
+| `listen.tailscale.enabled` | boolean | `false` | Start an additional private tsnet listener. |
+| `listen.tailscale.hostname` | string | — | Required when enabled. Device hostname presented to the control server (for example, `handler`). |
+| `listen.tailscale.state_dir` | path | — | Required when enabled. Persistent writable directory for the node identity and state. |
+| `listen.tailscale.auth_key_env` | environment variable name | `RCFIN_TAILSCALE_AUTH_KEY` | Environment variable containing the enrollment auth key. When Tailscale is enabled, the selected variable must be non-empty. |
+| `listen.tailscale.control_url` | URL | empty | Optional custom control server URL, such as `https://headscale.example.com`; empty uses the default Tailscale control server. |
 
-If `rclone.config` is omitted or empty, the embedded Rclone SDK uses its normal default configuration behavior. The configured file must be readable by the RCFin process and contain a section for each named remote referenced by a library. Keep credentials private and do not paste them into issue reports.
+## Logging and caches
 
-Each collection uses the key `remote`, with a value such as `files:HTPC/Movies`. The part before the colon (`files`) must exactly match a section name such as `[files]` in the Rclone config file. The part after the colon is the path within that remote. A remote can be reused by multiple collections, and different collections can select different remotes. Rclone config and credentials are global; VFS options are per collection.
+| YAML key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `logfile` | string | `stdout` | Log destination. File paths are opened for append/create. |
+| `cachedir` | path | empty | Local resized-artwork cache. Rebuildable; the process must be able to create/write it. |
+| `rclone.cache_dir` | path | Rclone default | Root for local per-library VFS caches, including cached media ranges. |
 
-Example Rclone INI structure (provider options and credentials vary by backend):
+## Database
 
-```ini
-[files]
-type = crypt
-remote = upstream:/path/to/encrypted/data
-# Add the provider-specific and crypt options created for your setup.
-```
+| YAML key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `database.driver` | `sqlite` or `postgres` | `sqlite` | Selects the durable state backend. |
+| `database.sqlite.filename` | path | required when driver is `sqlite` | SQLite database file. Its parent directory must exist or be creatable by the process. |
+| `database.postgres.url` | URL | empty | PostgreSQL connection URL. When empty, `RCFIN_POSTGRES_URL` is used. |
 
-Use the normal Rclone tooling to create and verify remote sections. RCFin embeds Rclone and does not need a separate Rclone executable or FUSE mount at runtime.
+See [Database backends](database.md) for what is persisted, container volumes, backup guidance, and limitations when changing drivers.
 
-## Configuration fields
+## Rclone
 
-| YAML key | Meaning |
-| --- | --- |
-| `listen.address` | Optional bind address. Empty uses the server's default interface. |
-| `listen.port` | HTTP port; defaults to `8096`. |
-| `listen.tls_cert`, `listen.tls_key` | Set both paths to enable TLS. |
-| `listen.ip_acl` | Optional comma-separated client IP allow list; empty allows all clients. |
-| `logfile` | `stdout` (default), `stderr`, `none`, or a writable log file path. |
-| `cachedir` | Local artwork resize cache directory. |
-| `scan_interval` | Optional positive Go duration default for each library's unified inventory and media-work cycle; default `30m`. |
-| `database.driver` | `sqlite` (default for existing configurations) or `postgres`. |
-| `database.sqlite.filename` | Local SQLite database file path. |
-| `database.postgres.url` | PostgreSQL connection URL. If empty, RCFin reads `RCFIN_POSTGRES_URL` from the environment. |
-| `rclone.config` | Optional full path to the Rclone INI config file. |
-| `rclone.cache_dir` | Local root directory for VFS cache data. |
-| `jellyfin.server_id` | Optional stable server ID. Leave empty to let RCFin generate one. |
-| `jellyfin.server_name` | Display name; defaults to `RCFin`. |
-| `jellyfin.quick_connect` | Whether Quick Connect is enabled. |
-| `jellyfin.image_quality_poster` | Poster image quality setting. |
-| `collections[].id` | Required stable library ID used by account grants. Keep it unchanged when renaming a library. |
-| `collections[].name` | Collection display name. |
-| `collections[].type` | `movies` or `shows`. |
-| `collections[].remote` | Rclone remote path, e.g. `files:HTPC/Movies`. This key is named `remote`, not `directory`. |
-| `collections[].vfs` | Per-collection Rclone VFS options. See the [VFS reference](vfs-options.md). |
-| `collections[].media.scan_interval` | Optional per-library override for the single inventory cycle. Metadata, subtitles, and Inbox do not have independent poll intervals. |
-| `collections[].media.missing_grace` | Time an object must remain absent from successful inventories before its tombstone expires; default `7d`. |
-| `collections[].media.inbox.stable_for` | Quiet period for Inbox transfers when no reliable completion marker is configured; default `10m`. |
-| `collections[].media.inbox.completion_marker` | Optional marker the uploader creates only after the complete item has finished uploading. |
+| YAML key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `rclone.config` | path | Rclone SDK default | Full path to the Rclone INI file, including its filename. It must contain a section for every named remote used by a collection. |
+| `rclone.cache_dir` | path | Rclone default | Local root for VFS cache data. |
 
-The SQLite database is local. With PostgreSQL selected, durable application records live in PostgreSQL. Artwork resize and Rclone VFS caches remain local and rebuildable with either driver. The media itself is accessed through Rclone. The selected VFS cache mode and limits determine how much local disk can be used for media reads. PostgreSQL starts with its own empty schema; this change does not import existing SQLite data.
+The collection `remote` uses `section:path`, such as `media:Movies`. RCFin embeds Rclone v1.76.0 and registers its compiled backends; it does not shell out to an `rclone` command or require a FUSE mount. See [Rclone storage](rclone-storage.md).
 
-For compatibility, existing configs may continue using the compact Jellyfin keys `servername` and `imagequalityposter`. New configs should use `server_name` and `image_quality_poster` as shown in the example. Every collection must have a unique `id` made of letters, digits, `_` or `-`; account library grants refer to this ID, never the display name. User registration is not supported; create users with the RCFin CLI. See [account administration](accounts.md).
+## Jellyfin-compatible behavior
+
+| YAML key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `jellyfin.server_id` | string | generated | Optional stable server ID. Set it if the server identity must survive rebuilding or moving the deployment. |
+| `jellyfin.server_name` | string | `RCFin` | Display name presented to clients. |
+| `jellyfin.quick_connect` | boolean | `false` | Enables the Quick Connect workflow where supported. |
+| `jellyfin.image_quality_poster` | integer | `40` | Poster image output quality setting. |
+
+Older configurations may use `jellyfin.servername` and `jellyfin.imagequalityposter`; new files should use the underscored names above.
+
+## WebDAV
+
+| YAML key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `webdav.enabled` | boolean | `false` | Enables the global read-only virtual DAV endpoint. |
+| `webdav.path` | URL path | `/dav/` | Absolute non-root endpoint path, without dot segments. |
+| `webdav.cache.directory_ttl` | duration | `1m` | Lifetime of cached virtual directory trees. |
+
+See [WebDAV](webdav.md) for behavior and per-collection views and labels.
+
+## Collections
+
+Each collection is one Jellyfin-visible library backed by an independent Rclone filesystem and VFS.
+
+| YAML key | Type | Required/default | Meaning |
+| --- | --- | --- | --- |
+| `collections[].id` | string | required | Stable ID using letters, digits, `_` or `-`. Account grants use this ID; keep it stable when renaming the display name. |
+| `collections[].name` | string | required | Display name. |
+| `collections[].type` | enum | required | `movies` or `shows`. |
+| `collections[].remote` | Rclone path | required | Configured remote and path, e.g. `media:Films`. |
+| `collections[].vfs` | map | Rclone defaults plus RCFin overrides | Per-library VFS options. See [all accepted VFS keys and types](vfs-options.md). |
+| `collections[].media` | object | optional | Inventory cadence, Inbox policy, and optional processing stages. |
+| `collections[].webdav` | object | optional | Per-library WebDAV presentation options; only used when global WebDAV is enabled. |
+
+### Collection media and Inbox
+
+| YAML key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `collections[].media.scan_interval` | duration | global `scan_interval` | Per-library interval overriding the global inventory/media-work cycle. |
+| `collections[].media.missing_grace` | duration | `168h` (7 days) | How long a missing item remains in inventory before its tombstone expires. |
+| `collections[].media.inbox_path` | relative path | `.Inbox` | Path under the library root excluded from normal playback inventory and used for intake. |
+| `collections[].media.inbox.stable_for` | duration | `10m` | Quiet interval used to decide an Inbox tree is complete when no marker is configured. |
+| `collections[].media.inbox.completion_marker` | filename | empty | Optional file created only after upload completion. |
+| `collections[].media.max_parallel_jobs` | integer | `1` | Maximum simultaneous media jobs per library; zero uses one. Accepted range is `0..32`. |
+
+### Existing-path normalization
+
+| YAML key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `collections[].media.normalize_existing.enabled` | boolean | `false` | Enable the normalization workflow for existing paths outside Inbox. |
+| `collections[].media.normalize_existing.dry_run` | boolean | `true` | Keep normalization plans non-writing. Writes require explicit dry-run disablement and CLI apply confirmation. |
+
+### Organization
+
+| YAML key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `collections[].media.organize.enabled` | boolean | `false` | Allow automatic Inbox organization during the library cycle. |
+| `collections[].media.organize.dry_run` | boolean | `true` | Produce plans without moves by default. |
+| `collections[].media.organize.disc_folders` | boolean | `false` | Permit supported disc-folder movie items in organization. |
+| `collections[].media.organize.preserve_grouping_directories` | boolean | `true` | Retain recognized parent grouping directories when constructing destinations. |
+| `collections[].media.organize.conflict_policy` | string | `skip` | Destination collision behavior; `skip` leaves conflicts for review. |
+| `collections[].media.organize.allow_cross_backend_copy_delete` | boolean | `false` | Reserved safety switch. Cross-backend copy/delete organization is currently unsupported; setting this to `true` fails config validation. |
+| `collections[].media.organize.include_provider_id` | boolean | `true` | Include provider IDs in generated folder names when a reliable ID exists. |
+| `collections[].media.organize.minimum_confidence` | float | `0.82` effective provider threshold when unset/zero | Minimum provider identity confidence for automated organization; range `0..1`. |
+| `collections[].media.organize.folder_format` | template | built-in | Movie folder naming template. |
+| `collections[].media.organize.file_format` | template | built-in | Movie filename template. |
+| `collections[].media.organize.series_format` | template | built-in | TV series folder template. |
+| `collections[].media.organize.season_format` | template | built-in | Season folder template. |
+| `collections[].media.organize.episode_format` | template | built-in | Episode filename template. |
+| `collections[].media.organize.episode_fallback_languages` | language list | empty | Preferred fallback languages when provider episode titles are unavailable. |
+| `collections[].media.organize.allowed_extensions` | extension list | built-in video extensions | Video extensions eligible for organization. |
+| `collections[].media.organize.stable_for` | duration | Inbox stable interval | Quiet period required before an Inbox item can be moved. |
+| `collections[].media.organize.completion_marker` | filename | Inbox marker | Marker required before an Inbox item can be moved, when configured. |
+
+Only `skip` is currently supported for `conflict_policy`. Templates support the tokens documented in [Media layout and automation](media-layout.md). Preview with `library organize plan` before enabling writes.
+
+### Metadata and artwork
+
+| YAML key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `collections[].media.metadata.enabled` | boolean | `false` | Enable metadata enrichment. |
+| `collections[].media.metadata.provider` | string | `tmdb` | Supported provider: `tmdb`. |
+| `collections[].media.metadata.api_key_env` | environment variable name | `RCFIN_TMDB_API_KEY` | Variable holding the TMDb API key/read token. |
+| `collections[].media.metadata.language` | language tag | `en-US` | Preferred metadata language. |
+| `collections[].media.metadata.fallback_languages` | language list | `[en]` | Metadata lookup fallbacks. |
+| `collections[].media.metadata.artwork_max_bytes` | integer bytes | `12582912` | Maximum downloaded artwork size. |
+| `collections[].media.metadata.artwork_max_width` | integer pixels | `5000` | Maximum accepted artwork width. |
+| `collections[].media.metadata.artwork_max_height` | integer pixels | `5000` | Maximum accepted artwork height. |
+| `collections[].media.metadata.artwork_formats` | string list | `[jpeg, png]` | Accepted artwork formats. |
+| `collections[].media.metadata.artwork_poster_size` | string | `w500` | TMDb poster image size. |
+| `collections[].media.metadata.artwork_backdrop_size` | string | `w780` | TMDb backdrop image size. |
+| `collections[].media.metadata.request_timeout` | duration | `10s` | Per-request timeout. |
+| `collections[].media.metadata.retry_limit` | integer | `3` | Bounded retry count for transient provider failures. |
+| `collections[].media.metadata.fetch_artwork` | boolean | `true` | Write poster/backdrop artwork when available. |
+| `collections[].media.metadata.fetch_nfo` | boolean | `true` | Write metadata NFO sidecars when available. |
+| `collections[].media.metadata.overwrite_existing` | boolean | `false` | Replace existing NFO metadata fields. |
+| `collections[].media.metadata.overwrite_artwork` | boolean | follows `overwrite_existing` if omitted | Replace existing artwork files. |
+| `collections[].media.metadata.minimum_confidence` | float | `0.82` effective provider threshold when unset/zero | Minimum confidence for metadata matching; range `0..1`. |
+| `collections[].media.metadata.refresh_existing_after` | duration | disabled | Reconsider existing items after this interval. |
+
+### Subtitles
+
+| YAML key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `collections[].media.subtitles.enabled` | boolean | `false` | Enable subtitle search/download. |
+| `collections[].media.subtitles.provider` | string | `opensubtitles` | Supported provider: `opensubtitles`. |
+| `collections[].media.subtitles.api_key_env` | environment variable name | `RCFIN_OPENSUBTITLES_API_KEY` | OpenSubtitles application API key variable. |
+| `collections[].media.subtitles.username_env` | environment variable name | `RCFIN_OPENSUBTITLES_USERNAME` | Optional account username variable. |
+| `collections[].media.subtitles.password_env` | environment variable name | `RCFIN_OPENSUBTITLES_PASSWORD` | Optional account password variable. |
+| `collections[].media.subtitles.languages` | language list | `[en]` | Requested subtitle languages. |
+| `collections[].media.subtitles.hearing_impaired` | boolean | `false` | Prefer hearing-impaired/SDH tracks. |
+| `collections[].media.subtitles.forced` | boolean | `false` | Request forced subtitle tracks. |
+| `collections[].media.subtitles.formats` | string list | `[srt]` | Allowed download formats (supported outputs include SRT/VTT). |
+| `collections[].media.subtitles.overwrite_existing` | boolean | `false` | Replace matching existing subtitle sidecars. |
+| `collections[].media.subtitles.minimum_confidence` | float | `0.84` | Minimum candidate confidence; range `0..1`. |
+| `collections[].media.subtitles.request_timeout` | duration | `15s` | Provider request timeout. |
+| `collections[].media.subtitles.retry_limit` | integer | `3` | Bounded transient retry count. |
+| `collections[].media.subtitles.max_download_bytes` | integer bytes | `20971520` | Maximum subtitle download size. |
+
+Language tags accept bounded BCP-47-style values such as `en`, `pt-BR`, and `zh-Hans-CN`. See [Media layout and automation](media-layout.md) for provider behavior, order of operations, CLI planning, and overwrite safeguards.
+
+### Per-collection WebDAV presentation
+
+These fields apply when global `webdav.enabled` is true.
+
+| YAML key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `collections[].webdav.enabled` | boolean | `true` | Include this collection in WebDAV. |
+| `collections[].webdav.views` | list | `[all, genres, actors, directors, years]` | Views to publish. Supported values: `all`, `genres`, `actors`, `directors`, `years`, `studios`. |
+| `collections[].webdav.labels` | string map | built-in labels | Display labels for view names. |
+| `collections[].webdav.file_name` | template | built-in | Movie file naming template. |
+| `collections[].webdav.title_folder` | template | built-in | Movie title-folder template. |
+| `collections[].webdav.episode_file_name` | template | built-in | TV episode filename template. |
+| `collections[].webdav.nfo` | boolean | `true` | Expose NFO sidecars or generated read-only NFO responses. |
+| `collections[].webdav.artwork` | boolean | `true` | Expose available artwork sidecars. |
+
+## Environment and dotenv
+
+At startup RCFin loads `.env` from the working directory if present. Set `RCFIN_ENV_FILE` to use another file. Existing process environment values take precedence. Provider credential aliases are also accepted: `TMDB_READ_ACCESS_TOKEN` or `TMDB_API_KEY`, and `OPENSUBTITLES_API_KEY`, `OPENSUBTITLES_USERNAME`, `OPENSUBTITLES_PASSWORD`. Explicit `RCFIN_*` values win. Tailscale uses the exact environment variable named by `listen.tailscale.auth_key_env` (default `RCFIN_TAILSCALE_AUTH_KEY`).
+
+PostgreSQL uses `RCFIN_POSTGRES_URL` only when its YAML URL is empty. See [Networking and access](networking.md) for Tailscale secret guidance.
 
 ## Troubleshooting
 
-- `rclone remote path is required`: a collection is missing `remote` or has an empty value. `directory` is not the supported YAML key.
-- `didn't find section in config file ("files")`: verify `rclone.config` points to the actual readable INI file, including its filename, and that the file has a `[files]` section. A directory path or a differently named file will not load it.
-- RCFin `v1.0.0` did not install Rclone's file-backed config loader, so custom config files were ignored even with the correct path. Upgrade to a build containing the embedded config loader fix.
-- `remote not found in config`: check that the remote name before `:` matches the INI section name exactly.
-- Log file cannot be opened: select `stdout` or `stderr`, or ensure the RCFin user can create/append the configured file.
-- Library changes appear late: reduce `scan_interval` (globally or for that library) and/or `dir_cache_time`; enable `poll_interval` only when the backend supports polling.
-- Seeks are slow: check backend range-read support and tune the collection's read-chunk and cache settings.
+- **Remote section not found:** `rclone.config` is a filename, not a directory; confirm the section matches the part before `:` in `remote`.
+- **No library changes appear:** consider the collection/global `scan_interval` and the VFS `dir_cache_time`; they control different caches.
+- **Tailscale identity changes after restart:** persist and reuse `listen.tailscale.state_dir`.
+- **Media writes fail:** metadata, subtitles, and organization require a writable VFS. VFS is read-only by default; review [the VFS reference](vfs-options.md).
+- **Existing sidecars stay unchanged:** replacement is off by default. Set the stage-specific overwrite setting and review a plan before refreshing.

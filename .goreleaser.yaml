@@ -51,7 +51,8 @@ archives:
       - LICENSE
       - README.md
       - CONTRIBUTING.md
-      - rcfin.example.yaml
+      - config.example.yaml
+      - config.example.full.yaml
       - docs/**
 
 checksum:
